@@ -94,7 +94,7 @@ def transcribe(audio: Path, model_name: str, language: str | None):
     samples = decode_audio(audio)
     
     with console.status(
-        "[cyan]Preparing Whisper features and voice detection...",
+        "[cyan]Preparing audio (CPU voice detection and feature extraction)...",
         spinner="dots",
     ):
         segments, info = model.transcribe(
