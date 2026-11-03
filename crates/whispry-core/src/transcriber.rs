@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::audio::{AudioDecodeError, stream_audio};
@@ -131,9 +131,40 @@ pub fn run_job(
     on_event: EventSink,
     cancel: &CancelToken,
 ) -> Result<JobSummary, JobError> {
+    let mut position = 0.0;
+    let result = run(config, environment, on_event, cancel, &mut position);
+    count_failure_after_cancel_as_cancelled(result, cancel, &config.output_path(), position)
+}
+
+/// Once the user has cancelled, the worker or FFmpeg may stop in ways that
+/// look like errors. The user asked for the stop, so report a cancellation.
+fn count_failure_after_cancel_as_cancelled(
+    result: Result<JobSummary, JobError>,
+    cancel: &CancelToken,
+    output: &Path,
+    position: f64,
+) -> Result<JobSummary, JobError> {
+    match result {
+        Err(error) if cancel.is_cancelled() && !matches!(error, JobError::Cancelled(_)) => {
+            Err(JobCancelled {
+                output: output.exists().then(|| output.to_path_buf()),
+                position,
+            }
+            .into())
+        }
+        other => other,
+    }
+}
+
+fn run(
+    config: &JobConfig,
+    environment: &JobEnvironment,
+    on_event: EventSink,
+    cancel: &CancelToken,
+    position: &mut f64,
+) -> Result<JobSummary, JobError> {
     let job_start = Instant::now();
     let output = config.output_path();
-    let mut position = 0.0;
 
     let cancelled = |position: f64| JobCancelled {
         output: output.exists().then(|| output.clone()),
@@ -163,7 +194,7 @@ pub fn run_job(
         environment.model_directory.as_deref(),
     )?;
     if cancel.is_cancelled() {
-        return Err(cancelled(position).into());
+        return Err(cancelled(*position).into());
     }
 
     let mut worker = WorkerClient::spawn(worker_command, cancel)?;
@@ -176,7 +207,7 @@ pub fn run_job(
         cancel,
     )?;
     if cancel.is_cancelled() {
-        return Err(cancelled(position).into());
+        return Err(cancelled(*position).into());
     }
 
     let duration = probe_duration(&ffmpeg, &config.audio);
@@ -214,7 +245,7 @@ pub fn run_job(
     for window in windows {
         let window: AudioWindow = window?;
         if cancel.is_cancelled() {
-            return Err(cancelled(position).into());
+            return Err(cancelled(*position).into());
         }
 
         let mut texts: Vec<String> = Vec::new();
@@ -250,7 +281,7 @@ pub fn run_job(
                         text,
                     });
                     on_event(progress(segment_end));
-                    position = segment_end;
+                    *position = segment_end;
                 }
             },
             cancel,
@@ -263,7 +294,7 @@ pub fn run_job(
             return Err(error.into());
         }
         if was_cancelled || cancel.is_cancelled() {
-            return Err(cancelled(position).into());
+            return Err(cancelled(*position).into());
         }
 
         // Lock the language once speech is found, so windows stay consistent.
@@ -283,8 +314,8 @@ pub fn run_job(
             prompt = Some(prompt_tail(&texts));
         }
 
-        position = window.start() + window.duration();
-        on_event(progress(position));
+        *position = window.start() + window.duration();
+        on_event(progress(*position));
     }
 
     on_event(Event::StageFinished {
@@ -294,7 +325,7 @@ pub fn run_job(
 
     let summary = JobSummary {
         output: output.clone(),
-        audio_duration: position,
+        audio_duration: *position,
         elapsed: job_start.elapsed().as_secs_f64(),
     };
     on_event(Event::Finished {
@@ -316,6 +347,26 @@ mod tests {
         assert_eq!(prompt.chars().count(), PROMPT_CHARACTERS);
         assert!(prompt.ends_with('b'));
         assert_eq!(prompt_tail(&["hi".into(), "there".into()]), "hi there");
+    }
+
+    #[test]
+    fn a_failure_after_cancelling_is_reported_as_a_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("out.txt");
+        std::fs::write(&output, "[00:00] hi\n").unwrap();
+        let failure = || Err(JobError::Worker(WorkerError::Exited("killed".into())));
+
+        let cancel = CancelToken::new();
+        let untouched = count_failure_after_cancel_as_cancelled(failure(), &cancel, &output, 5.0);
+        assert!(matches!(untouched, Err(JobError::Worker(_))));
+
+        cancel.cancel();
+        let Err(JobError::Cancelled(cancelled)) =
+            count_failure_after_cancel_as_cancelled(failure(), &cancel, &output, 5.0)
+        else {
+            panic!("expected a cancellation");
+        };
+        assert_eq!((cancelled.output, cancelled.position), (Some(output), 5.0));
     }
 
     #[test]
