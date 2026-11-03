@@ -110,3 +110,23 @@ def test_unexpected_errors_are_shown_not_swallowed():
         assert "ValueError: weird" in text(app, "#result")
 
     run_screen(fake_run_job, check)
+
+
+def test_timing_shows_speed_and_time_left():
+    gate = threading.Event()
+
+    def fake_run_job(config, on_event, system, cancel):
+        on_event(Progress(Stage.TRANSCRIBE, 600, 1800, "s"))
+        gate.wait(5)
+        return Finished(Path("talk.txt"), 1800, 1)
+
+    async def check(app, pilot):
+        await pilot.pause()
+        app.screen.started -= 300  # 10 minutes of audio in 5 minutes: 2x
+        app.screen._update_timing()
+        timing = text(app, "#timing")
+        gate.set()
+        assert "2.0x realtime" in timing
+        assert "about 10:00 left" in timing
+
+    run_screen(fake_run_job, check)

@@ -73,7 +73,7 @@ class RunScreen(Screen):
                 id="summary",
             )
             yield Label("Starting...", id="stage")
-            yield ProgressBar(total=None, show_eta=True, id="progress")
+            yield ProgressBar(total=None, show_eta=False, id="progress")
             yield Static("", id="timing")
             yield RichLog(wrap=True, id="transcript")
             yield RichLog(wrap=True, max_lines=200, id="activity")
@@ -149,6 +149,9 @@ class RunScreen(Screen):
             if self.position > 0:
                 speed = self.position / max(elapsed, 1e-6)
                 text += f" · {speed:.1f}x realtime"
+                remaining = max(self.total - self.position, 0) / speed
+                if self.running and remaining >= 1:
+                    text += f" · about {format_timestamp(remaining)} left"
         self.query_one("#timing", Static).update(text)
 
     def _done(self, message: str, style: str) -> None:
