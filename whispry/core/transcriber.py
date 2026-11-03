@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import time
+from contextlib import closing
 
-from whispry.core.audio import decode_audio
+from whispry.core.audio import stream_audio
+from whispry.core.chunking import iter_windows
 from whispry.core.config import BEAM_SIZE, JobConfig
 from whispry.core.cuda_libs import prepare_cuda_libraries
 from whispry.core.events import (
@@ -19,7 +21,7 @@ from whispry.core.events import (
     StageStarted,
     ignore_event,
 )
-from whispry.core.ffmpeg import require_ffmpeg
+from whispry.core.ffmpeg import probe_duration, require_ffmpeg
 from whispry.core.models import ensure_model
 from whispry.core.platform import (
     AUTO,
@@ -29,6 +31,9 @@ from whispry.core.platform import (
     resolve_device,
 )
 from whispry.core.timestamps import format_timestamp
+
+# Tail of the previous window's text given to the next window as context.
+PROMPT_CHARACTERS = 200
 
 
 class ModelLoadError(RuntimeError):
@@ -85,7 +90,11 @@ def run_job(
     on_event: EventSink = ignore_event,
     system: SystemInfo | None = None,
 ) -> Finished:
-    """Transcribe `config.audio` and write timestamped text to the output file."""
+    """Transcribe `config.audio` and write timestamped text to the output file.
+
+    Audio is decoded and transcribed one window (`config.chunk_minutes`) at a
+    time, so memory use does not grow with the length of the file.
+    """
     job_start = time.perf_counter()
     system = system or detect_system()
 
@@ -97,37 +106,58 @@ def run_job(
     model_dir = ensure_model(config.model, on_event)
     model = load_model(model_dir, config, system, on_event)
 
-    on_event(StageStarted(Stage.DECODE, "Decoding audio with FFmpeg..."))
-    start = time.perf_counter()
-    samples = decode_audio(config.audio, ffmpeg, on_event)
-    segments, info = model.transcribe(
-        samples,
-        language=config.language,
-        beam_size=BEAM_SIZE,
-        vad_filter=True,
-    )
-    on_event(StageFinished(Stage.DECODE, time.perf_counter() - start))
-    on_event(LanguageDetected(info.language, info.language_probability))
-
+    duration = probe_duration(ffmpeg, config.audio)
     on_event(StageStarted(Stage.TRANSCRIBE, "Transcribing..."))
+    on_event(Progress(Stage.TRANSCRIBE, 0.0, duration, "s"))
     start = time.perf_counter()
+
+    language = config.language
+    if language:
+        on_event(LanguageDetected(language, 1.0))
+
+    prompt = None
+    position = 0.0
     output = config.output_path
-    duration = info.duration
 
-    with output.open("w", encoding="utf-8") as file:
-        for segment in segments:
-            text = segment.text.strip()
-            file.write(f"[{format_timestamp(segment.start)}] {text}\n")
-            file.flush()
-
-            on_event(SegmentReady(segment.start, segment.end, text))
-            on_event(
-                Progress(Stage.TRANSCRIBE, min(segment.end, duration), duration, "s")
+    with output.open("w", encoding="utf-8") as file, closing(
+        stream_audio(config.audio, ffmpeg)
+    ) as blocks:
+        for window in iter_windows(blocks, config.chunk_minutes * 60):
+            texts = []
+            segments, info = model.transcribe(
+                window.samples,
+                language=language,
+                beam_size=BEAM_SIZE,
+                vad_filter=True,
+                initial_prompt=prompt,
             )
 
-    on_event(Progress(Stage.TRANSCRIBE, duration, duration, "s"))
+            for segment in segments:
+                text = segment.text.strip()
+                segment_start = window.start + segment.start
+                segment_end = window.start + min(segment.end, window.duration)
+
+                file.write(f"[{format_timestamp(segment_start)}] {text}\n")
+                file.flush()
+                texts.append(text)
+
+                on_event(SegmentReady(segment_start, segment_end, text))
+                on_event(Progress(Stage.TRANSCRIBE, segment_end, duration, "s"))
+
+            # Lock the language once speech is found, so windows stay consistent.
+            if language is None and texts:
+                language = info.language
+                on_event(LanguageDetected(language, info.language_probability))
+
+            # Carry context across the cut so sentences continue naturally.
+            if texts:
+                prompt = " ".join(texts)[-PROMPT_CHARACTERS:]
+
+            position = window.start + window.duration
+            on_event(Progress(Stage.TRANSCRIBE, position, duration, "s"))
+
     on_event(StageFinished(Stage.TRANSCRIBE, time.perf_counter() - start))
 
-    finished = Finished(output, duration, time.perf_counter() - job_start)
+    finished = Finished(output, position, time.perf_counter() - job_start)
     on_event(finished)
     return finished

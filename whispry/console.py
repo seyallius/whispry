@@ -7,7 +7,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from whispry.core import JobConfig, run_job
-from whispry.core.config import DEFAULT_MODEL, LANGUAGES, MODEL_REPOSITORIES
+from whispry.core.config import DEFAULT_CHUNK_MINUTES, DEFAULT_MODEL, LANGUAGES, MODEL_REPOSITORIES
 from whispry.core.config import validate_config
 from whispry.core.events import (
     Finished,
@@ -20,6 +20,7 @@ from whispry.core.events import (
     StageStarted,
 )
 from whispry.core import ffmpeg as ffmpeg_tools
+from whispry.core.audio import AudioDecodeError
 from whispry.core.platform import DeviceUnavailable
 from whispry.core.timestamps import format_timestamp
 from whispry.core.transcriber import ModelLoadError
@@ -106,6 +107,8 @@ def main():
                         help="Whisper model size")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto",
                         help="Compute device; auto uses the GPU when available")
+    parser.add_argument("--chunk-minutes", type=float, default=DEFAULT_CHUNK_MINUTES,
+                        help="Process audio this many minutes at a time (bounds RAM use)")
     parser.add_argument("--compute-type", default=None,
                         help="CTranslate2 compute type; defaults to the device's best")
     args = parser.parse_args()
@@ -116,6 +119,7 @@ def main():
         language=args.language,
         device=args.device,
         compute_type=args.compute_type,
+        chunk_minutes=args.chunk_minutes,
     )
     for problem in validate_config(config):
         parser.error(problem)
@@ -128,7 +132,12 @@ def main():
     except KeyboardInterrupt:
         print("\nInterrupted by user.", file=sys.stderr)
         sys.exit(130)
-    except (DeviceUnavailable, ModelLoadError, ffmpeg_tools.FFmpegNotFound) as error:
+    except (
+        AudioDecodeError,
+        DeviceUnavailable,
+        ModelLoadError,
+        ffmpeg_tools.FFmpegNotFound,
+    ) as error:
         print(f"\nError: {error}", file=sys.stderr)
         sys.exit(1)
 

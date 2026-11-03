@@ -14,7 +14,6 @@ from typing import Callable, Union
 
 class Stage(str, Enum):
     MODEL = "model"
-    DECODE = "decode"
     TRANSCRIBE = "transcribe"
 
 
