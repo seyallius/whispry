@@ -6,9 +6,13 @@
 
 pub mod config;
 pub mod events;
+pub mod ffmpeg;
 pub mod platform;
 mod process;
 pub mod timestamps;
+
+#[cfg(test)]
+mod test_support;
 
 /// The version of Whispry, taken from the workspace manifest.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
