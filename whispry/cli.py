@@ -132,6 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Output text file (default: beside the input, .txt)")
 
     commands.add_parser("devices", help="Show the OS and which devices can run Whisper")
+    commands.add_parser("ffmpeg", help="Check for FFmpeg and, if missing, ask how to get it")
 
     download = commands.add_parser("download", help="Download a model for offline use")
     download.add_argument("model", choices=MODEL_REPOSITORIES)
@@ -184,6 +185,14 @@ def main(argv: list[str] | None = None) -> None:
             transcribe(parser, args)
         elif args.command == "devices":
             show_devices()
+        elif args.command == "ffmpeg":
+            tool = ffmpeg_tools.find_ffmpeg()
+            if tool:
+                print(f"FFmpeg found: {tool.ffmpeg} ({tool.source})")
+            elif not ask_for_ffmpeg():
+                sys.exit(1)
+            else:
+                print(f"FFmpeg ready: {ffmpeg_tools.find_ffmpeg().ffmpeg}")
         elif args.command == "download":
             print(ensure_model(args.model, ConsoleRenderer()))
     except KeyboardInterrupt:
