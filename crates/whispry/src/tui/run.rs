@@ -519,12 +519,22 @@ impl RunState {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let [stage, bar, timing] = Layout::vertical([Constraint::Length(1); 3]).areas(inner);
-        frame.render_widget(Paragraph::new(self.stage_message.clone()), stage);
+        let stage_text = match &self.status {
+            RunStatus::Finished { .. } => "Done.".to_string(),
+            RunStatus::Cancelled { .. } => "Stopped.".to_string(),
+            RunStatus::Failed { .. } => "Stopped by an error.".to_string(),
+            RunStatus::Running | RunStatus::Cancelling => self.stage_message.clone(),
+        };
+        frame.render_widget(Paragraph::new(stage_text), stage);
 
         let ratio = self.ratio();
         let finished = matches!(self.status, RunStatus::Finished { .. });
         let gauge = Gauge::default()
-            .gauge_style(Style::new().fg(if finished { OK } else { ACCENT }))
+            .gauge_style(
+                Style::new()
+                    .fg(if finished { OK } else { ACCENT })
+                    .bg(Color::Indexed(237)),
+            )
             .ratio(if finished { 1.0 } else { ratio.unwrap_or(0.0) })
             .label(match ratio {
                 _ if finished => "100%".to_string(),

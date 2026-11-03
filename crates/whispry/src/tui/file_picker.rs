@@ -61,7 +61,9 @@ impl PickerState {
             selected: 0,
             error: None,
         };
-        state.load(dir.to_path_buf(), None);
+        // An absolute path, so every parent folder is a real place to go to.
+        let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+        state.load(dir, None);
         state
     }
 
@@ -351,6 +353,13 @@ mod tests {
         state.load(talks.join("missing"), None);
         assert!(state.error.as_deref().unwrap().contains("Cannot open"));
         assert_eq!(names(&state), ["..", "old", "A.WAV", "b.mp3"]);
+    }
+
+    #[test]
+    fn a_relative_folder_is_made_absolute_so_it_can_go_up() {
+        let state = PickerState::open(Path::new("."));
+        assert!(state.dir.is_absolute());
+        assert_eq!(state.entries()[0].kind, EntryKind::Parent);
     }
 
     #[test]

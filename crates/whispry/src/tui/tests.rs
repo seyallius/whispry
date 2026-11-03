@@ -742,3 +742,31 @@ fn long_activity_lines_are_cut_short_not_wrapped() {
     assert!(text.contains("Using cached model: xxx"), "{text}");
     assert!(text.contains('…'), "{text}");
 }
+
+#[test]
+fn browsing_a_bare_file_name_opens_the_current_folder_not_home() {
+    let mut app = App::new(Box::new(FakeServices::new(0)), None);
+    app.on_paste("Cargo.toml"); // exists in the crate folder the tests run in
+    ctrl(&mut app, 'o');
+    let cwd = std::env::current_dir().unwrap();
+    let text = screen(&app, 140, 30);
+    assert!(text.contains(&cwd.display().to_string()), "{text}");
+}
+
+#[test]
+fn a_finished_job_no_longer_says_it_is_transcribing() {
+    let (mut app, dir) = running_app();
+    send_event(Event::StageStarted {
+        stage: Stage::Transcribe,
+        message: "Transcribing...".into(),
+    });
+    deliver(&mut app);
+    assert!(screen(&app, 100, 34).contains("Transcribing..."));
+    send(JobMessage::Done(Ok(summary(&dir.path().join("talk.txt")))));
+    deliver(&mut app);
+    let text = screen(&app, 100, 34);
+    // The stage line is the first row inside the progress box.
+    let stage_line = text.lines().nth(3).unwrap();
+    assert!(stage_line.contains("Done."), "{text}");
+    assert!(!stage_line.contains("Transcribing"), "{text}");
+}

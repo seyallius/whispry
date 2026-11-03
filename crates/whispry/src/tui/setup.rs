@@ -246,9 +246,16 @@ impl SetupState {
     pub fn browse_start(&self) -> PathBuf {
         let current = normalize_path(self.file.text());
         let beside = if current.is_dir() {
-            Some(current.clone())
+            Some(current)
         } else {
-            current.parent().map(PathBuf::from)
+            // A bare file name has an empty parent: that means "here".
+            current.parent().map(|parent| {
+                if parent.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    parent.to_path_buf()
+                }
+            })
         };
         beside
             .filter(|dir| dir.is_dir())
