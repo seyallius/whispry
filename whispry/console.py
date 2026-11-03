@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Console front end: parses arguments and renders core events."""
 
 import argparse
