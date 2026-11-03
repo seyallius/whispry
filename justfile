@@ -1,36 +1,44 @@
-# Whispry development and transcription recipes.
+# Whispry developer recipes: setup, dependencies, checks.
+# Users don't need just: run `python3 scripts/setup.py`, then `whispry`.
+
+python := if os_family() == "windows" { ".venv/Scripts/python.exe" } else { ".venv/bin/python" }
+system_python := if os_family() == "windows" { "python" } else { "python3" }
 
 default:
     @just --list
 
-# Install Python dependencies and CUDA runtime libraries.
-setup:
-    ./scripts/setup.sh
+# Create .venv and install Whispry with dev tools (GPU support auto-detected; pass --gpu or --cpu to override).
+setup *flags:
+    {{system_python}} scripts/setup.py --dev {{flags}}
 
-# Verify that CTranslate2 can access the NVIDIA GPU.
+# Reinstall dependencies after changing pyproject.toml.
+deps *extras="dev":
+    {{python}} -m pip install -e ".[{{extras}}]"
+
+# Install the bundled FFmpeg build into .venv.
+deps-ffmpeg:
+    {{python}} -m pip install -e ".[ffmpeg]"
+
+# Show the detected OS, devices (CPU/GPU), and FFmpeg.
 check:
-    ./scripts/run.sh -c "import ctranslate2; print('CUDA devices:', ctranslate2.get_cuda_device_count()); print('Compute types:', ctranslate2.get_supported_compute_types('cuda'))"
-
-# Transcribe with automatic language detection.
-transcribe file model="small":
-    ./scripts/run.sh transcribe.py "{{file}}" --model "{{model}}"
-
-# Transcribe Persian speech.
-persian file model="small":
-    ./scripts/run.sh transcribe.py "{{file}}" --language fa --model "{{model}}"
-
-# Transcribe English speech.
-english file model="small":
-    ./scripts/run.sh transcribe.py "{{file}}" --language en --model "{{model}}"
+    {{python}} -m whispry devices
 
 # Download and cache a Whisper model.
 download model="small":
-    hf download "Systran/faster-whisper-{{model}}" --local-dir "models/{{model}}"
+    {{python}} -m whispry download {{model}}
 
-# Check Python syntax without executing the transcriber.
+# Run Whispry from the checkout (no args opens the TUI).
+run *args:
+    {{python}} -m whispry {{args}}
+
+# Run the test suite.
+test *args:
+    {{python}} -m pytest {{args}}
+
+# Byte-compile every module to catch syntax errors.
 lint:
-    ./scripts/run.sh -c "import ast, pathlib; ast.parse(pathlib.Path('transcribe.py').read_text())"
+    {{python}} -m compileall -q whispry tests scripts
 
 # Remove Python cache files.
 clean:
-    find . -type d -name __pycache__ -not -path './.venv/*' -prune -exec rm -rf {} +
+    {{python}} -c "import pathlib, shutil; [shutil.rmtree(p) for p in pathlib.Path('.').rglob('__pycache__') if '.venv' not in p.parts]"

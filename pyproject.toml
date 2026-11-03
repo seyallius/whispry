@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whispry"
+dynamic = ["version"]
+description = "Private, local speech-to-text transcription on CPU or NVIDIA GPU."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "faster-whisper==1.2.1",
+    # 4.8.5 is the build verified to need only cuBLAS (not cuDNN) on Linux.
+    "ctranslate2>=4.8.5,<5",
+    "numpy>=1.26,<3",
+    "huggingface-hub>=0.30,<2",
+    "tqdm>=4.66,<5",
+    "textual>=8,<9",
+]
+
+[project.optional-dependencies]
+# CUDA 12 runtime libraries used by CTranslate2 on NVIDIA GPUs.
+# Linux needs only cuBLAS; the Windows build of CTranslate2 also uses cuDNN.
+gpu = [
+    "nvidia-cublas-cu12>=12.4,<13; platform_system == 'Linux' or platform_system == 'Windows'",
+    "nvidia-cudnn-cu12==9.*; platform_system == 'Windows'",
+]
+# Bundled FFmpeg build, for machines without FFmpeg on PATH.
+ffmpeg = ["imageio-ffmpeg>=0.5"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+whispry = "whispry.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "whispry.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["whispry*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
