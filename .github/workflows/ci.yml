@@ -53,3 +53,6 @@ jobs:
       - name: Test the worker
         working-directory: worker
         run: python -m pytest -q
+
+      - name: Test the setup script
+        run: python -m pytest -q scripts

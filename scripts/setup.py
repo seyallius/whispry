@@ -1,111 +1,155 @@
 #!/usr/bin/env python3
-"""Set up Whispry in a local virtual environment on Linux, Windows, or macOS.
+"""Set up Whispry's transcription worker.
 
-    python3 scripts/setup.py          (Windows: py scripts\\setup.py)
+Run this once after downloading Whispry (it only needs Python 3.10 or newer):
 
-Detects an NVIDIA GPU and installs GPU support only when one is present,
-then checks for FFmpeg and asks how to get it if it is missing.
-Uses only the standard library, so it runs before anything is installed.
+    python3 setup.py          (Windows: py setup.py)
+
+It creates a private Python environment in the ".venv" folder next to the
+whispry program and installs the worker into it, plus the NVIDIA CUDA
+libraries when it finds an NVIDIA GPU. Nothing is installed anywhere else.
+
+Options:
+    --gpu    install the GPU libraries even if no GPU was detected
+    --cpu    skip the GPU libraries even if a GPU was detected
+    --dev    for a source checkout: editable install with the test tools
 """
 
 from __future__ import annotations
 
 import argparse
-import platform
-import shutil
+import os
 import subprocess
 import sys
-import venv
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-VENV = ROOT / ".venv"
-MIN_PYTHON = (3, 10)
+MINIMUM_PYTHON = (3, 10)
+HERE = Path(__file__).resolve().parent
 
 
-def venv_python() -> Path:
-    if platform.system() == "Windows":
-        return VENV / "Scripts" / "python.exe"
-    return VENV / "bin" / "python"
+def find_root(here: Path = HERE) -> Path:
+    """The folder holding worker/ and, beside it, .venv and the program.
+
+    A release archive has worker/ next to this script. In a source checkout
+    this script lives in scripts/ and worker/ is one level up.
+    """
+    for candidate in (here, here.parent):
+        if (candidate / "worker" / "pyproject.toml").is_file():
+            return candidate
+    sys.exit("Could not find the worker folder next to this script.")
 
 
-def venv_command(name: str) -> Path:
-    if platform.system() == "Windows":
-        return VENV / "Scripts" / f"{name}.exe"
-    return VENV / "bin" / name
+def venv_python(venv: Path, platform: str = sys.platform) -> Path:
+    if platform == "win32":
+        return venv / "Scripts" / "python.exe"
+    return venv / "bin" / "python"
 
 
-def has_nvidia_gpu() -> bool:
-    if platform.system() not in ("Linux", "Windows"):
-        return False
-    smi = shutil.which("nvidia-smi")
-    if not smi:
-        return False
+def gpu_supported(platform: str = sys.platform) -> bool:
+    """The NVIDIA libraries are only published for Linux and Windows."""
+    return platform.startswith("linux") or platform == "win32"
+
+
+def count_gpus(listing: str) -> int:
+    """Number of GPUs in the output of `nvidia-smi -L`."""
+    return sum(1 for line in listing.splitlines() if line.strip().startswith("GPU "))
+
+
+def detect_gpu() -> bool:
     try:
-        result = subprocess.run([smi, "-L"], capture_output=True, text=True, timeout=20)
+        result = subprocess.run(
+            ["nvidia-smi", "-L"], capture_output=True, text=True, timeout=30
+        )
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return result.returncode == 0 and "GPU" in result.stdout
+    return result.returncode == 0 and count_gpus(result.stdout) > 0
 
 
-def run(*command) -> None:
-    print("+", " ".join(map(str, command)), flush=True)
-    subprocess.run(list(map(str, command)), check=True, cwd=ROOT)
+def extras(gpu: bool, dev: bool) -> str:
+    return ",".join(name for name, wanted in (("gpu", gpu), ("dev", dev)) if wanted)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    gpu = parser.add_mutually_exclusive_group()
-    gpu.add_argument("--gpu", action="store_true", help="Install GPU support even if no GPU is detected")
-    gpu.add_argument("--cpu", action="store_true", help="Skip GPU support even if a GPU is detected")
-    parser.add_argument("--dev", action="store_true", help="Also install development tools (pytest)")
-    parser.add_argument("--skip-ffmpeg", action="store_true", help="Don't check for FFmpeg")
-    args = parser.parse_args()
+def install_target(worker: Path, gpu: bool, dev: bool) -> list[str]:
+    """The pip arguments that install the worker."""
+    spec = str(worker)
+    chosen = extras(gpu, dev)
+    if chosen:
+        spec += f"[{chosen}]"
+    return ["-e", spec] if dev else [spec]
 
-    if sys.version_info < MIN_PYTHON:
-        sys.exit(f"Whispry needs Python {'.'.join(map(str, MIN_PYTHON))} or newer; "
-                 f"this is {platform.python_version()}.")
 
-    print(f"System: {platform.system()} {platform.release()} ({platform.machine()}), "
-          f"Python {platform.python_version()}")
+def run(command: list[str], **options) -> subprocess.CompletedProcess:
+    return subprocess.run(command, **options)
 
-    if args.gpu:
-        use_gpu = True
-        print("GPU support: requested with --gpu")
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Set up Whispry's transcription worker.")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--gpu", action="store_true", help="install GPU libraries")
+    group.add_argument("--cpu", action="store_true", help="skip GPU libraries")
+    parser.add_argument("--dev", action="store_true", help="editable install with test tools")
+    args = parser.parse_args(argv)
+
+    if sys.version_info < MINIMUM_PYTHON:
+        found = ".".join(map(str, sys.version_info[:3]))
+        wanted = ".".join(map(str, MINIMUM_PYTHON))
+        print(f"Python {wanted} or newer is needed (this is {found}).", file=sys.stderr)
+        return 1
+
+    root = find_root()
+    venv = root / ".venv"
+    python = venv_python(venv)
+
+    if not gpu_supported():
+        gpu = False
+    elif args.gpu:
+        gpu = True
     elif args.cpu:
-        use_gpu = False
-        print("GPU support: skipped with --cpu")
+        gpu = False
     else:
-        use_gpu = has_nvidia_gpu()
-        print("GPU support: NVIDIA GPU detected, installing CUDA libraries" if use_gpu
-              else "GPU support: no NVIDIA GPU detected, installing CPU-only")
+        gpu = detect_gpu()
+    print(f"NVIDIA GPU libraries: {'yes' if gpu else 'no'}"
+          + ("" if args.gpu or args.cpu else " (detected automatically; use --gpu or --cpu to override)"))
 
-    if not venv_python().exists():
-        print(f"Creating virtual environment in {VENV}")
-        venv.create(VENV, with_pip=True)
+    if not python.is_file():
+        print(f"Creating the Python environment in {venv} ...")
+        if run([sys.executable, "-m", "venv", str(venv)]).returncode != 0:
+            print("Could not create the environment. On Debian or Ubuntu, "
+                  "install the python3-venv package first.", file=sys.stderr)
+            return 1
 
-    extras = [name for name, wanted in (("gpu", use_gpu), ("dev", args.dev)) if wanted]
-    target = f".[{','.join(extras)}]" if extras else "."
+    print("Installing the transcription worker (this can take a few minutes) ...")
+    command = [str(python), "-m", "pip", "install", "--disable-pip-version-check",
+               *install_target(root / "worker", gpu, args.dev)]
+    if run(command).returncode != 0:
+        print("Installing the worker failed. Check your internet connection and try again.",
+              file=sys.stderr)
+        return 1
 
-    python = venv_python()
-    run(python, "-m", "pip", "install", "--upgrade", "pip")
-    run(python, "-m", "pip", "install", "-e", target)
+    check = run([str(python), "-c", "import faster_whisper, ctranslate2"], capture_output=True, text=True)
+    if check.returncode != 0:
+        print("The worker was installed but cannot start:\n" + check.stderr, file=sys.stderr)
+        return 1
 
-    if not args.skip_ffmpeg:
-        # Reuses the app's own check, which asks before installing anything.
-        subprocess.run([str(python), "-m", "whispry", "ffmpeg"], cwd=ROOT)
+    program = find_program(root)
+    if program is None:
+        print("\nWorker ready. The whispry program was not found next to this script"
+              + (" (build it with: cargo build --release)." if args.dev else "."))
+        return 0
 
     print()
-    run(python, "-m", "whispry", "devices")
-    print()
-    print("Whispry is ready. Start it with:")
-    print(f"  {venv_command('whispry')}")
-    print("or activate the environment first and then just run `whispry`:")
-    if platform.system() == "Windows":
-        print(r"  .venv\Scripts\activate")
-    else:
-        print("  source .venv/bin/activate")
+    for subcommand in ("ffmpeg", "devices"):
+        run([str(program), subcommand], env={**os.environ, "WHISPRY_PYTHON": str(python)})
+        print()
+    print(f"All set. Start Whispry with: {program}")
+    return 0
+
+
+def find_program(root: Path) -> Path | None:
+    name = "whispry.exe" if sys.platform == "win32" else "whispry"
+    candidates = [root / name, root / "target" / "release" / name, root / "target" / "debug" / name]
+    return next((path for path in candidates if path.is_file()), None)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
