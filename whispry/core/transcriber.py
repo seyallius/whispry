@@ -19,6 +19,7 @@ from whispry.core.events import (
     StageStarted,
     ignore_event,
 )
+from whispry.core.ffmpeg import require_ffmpeg
 from whispry.core.models import ensure_model
 from whispry.core.platform import (
     AUTO,
@@ -88,15 +89,17 @@ def run_job(
     job_start = time.perf_counter()
     system = system or detect_system()
 
-    # Fail fast on an impossible device before downloading anything.
+    # Fail fast on an impossible device or missing FFmpeg before downloading.
     resolve_device(config.device, system, config.compute_type)
+    ffmpeg = require_ffmpeg()
+    on_event(Log(f"Using {ffmpeg.source} FFmpeg: {ffmpeg.ffmpeg}"))
 
     model_dir = ensure_model(config.model, on_event)
     model = load_model(model_dir, config, system, on_event)
 
     on_event(StageStarted(Stage.DECODE, "Decoding audio with FFmpeg..."))
     start = time.perf_counter()
-    samples = decode_audio(config.audio, on_event)
+    samples = decode_audio(config.audio, ffmpeg, on_event)
     segments, info = model.transcribe(
         samples,
         language=config.language,

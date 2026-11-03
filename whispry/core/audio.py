@@ -9,36 +9,23 @@ import numpy as np
 
 from whispry.core.config import SAMPLE_RATE
 from whispry.core.events import EventSink, Progress, Stage, ignore_event
+from whispry.core.ffmpeg import FFmpeg, probe_duration, subprocess_flags
 
 BYTES_PER_SAMPLE = 4
 READ_SIZE = 1024 * 1024
 
 
-def get_audio_duration(audio: Path) -> float:
-    """Return the media duration in seconds using FFprobe."""
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            str(audio),
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    return float(result.stdout.strip())
-
-
-def decode_audio(audio: Path, on_event: EventSink = ignore_event) -> np.ndarray:
+def decode_audio(
+    audio: Path,
+    tool: FFmpeg,
+    on_event: EventSink = ignore_event,
+) -> np.ndarray:
     """Decode the whole file to 16 kHz mono float32 samples."""
-    duration = get_audio_duration(audio)
-    expected_bytes = int(duration * SAMPLE_RATE * BYTES_PER_SAMPLE)
+    duration = probe_duration(tool, audio)
+    expected_bytes = int(duration * SAMPLE_RATE * BYTES_PER_SAMPLE) if duration else None
 
     command = [
-        "ffmpeg",
+        tool.ffmpeg,
         "-nostdin",
         "-v", "error",
         "-i", str(audio),
@@ -52,6 +39,7 @@ def decode_audio(audio: Path, on_event: EventSink = ignore_event) -> np.ndarray:
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
+        creationflags=subprocess_flags(),
     )
 
     chunks = []

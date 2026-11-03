@@ -25,6 +25,8 @@ gpu = [
     "nvidia-cublas-cu12>=12.4,<13; platform_system == 'Linux' or platform_system == 'Windows'",
     "nvidia-cudnn-cu12==9.*; platform_system == 'Windows'",
 ]
+# Bundled FFmpeg build, for machines without FFmpeg on PATH.
+ffmpeg = ["imageio-ffmpeg>=0.5"]
 dev = ["pytest>=8"]
 
 [project.scripts]

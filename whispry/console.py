@@ -19,6 +19,7 @@ from whispry.core.events import (
     StageFinished,
     StageStarted,
 )
+from whispry.core import ffmpeg as ffmpeg_tools
 from whispry.core.platform import DeviceUnavailable
 from whispry.core.timestamps import format_timestamp
 from whispry.core.transcriber import ModelLoadError
@@ -64,6 +65,38 @@ class ConsoleRenderer:
         bar.update(event.completed - bar.n)
 
 
+def ask_for_ffmpeg() -> bool:
+    """Ask how to get FFmpeg. Return True once it is available."""
+    print("FFmpeg is required to decode audio, but it was not found.\n")
+    print("  1) Show me how to install FFmpeg and add it to PATH")
+    print(f"  2) Use the bundled FFmpeg ({ffmpeg_tools.BUNDLED_DOWNLOAD_SIZE})")
+    print("  3) Cancel\n")
+
+    if not sys.stdin.isatty():
+        print("Not running interactively; choose by installing FFmpeg or running:")
+        print(f"  {sys.executable} -m pip install {ffmpeg_tools.BUNDLED_PACKAGE}")
+        return False
+
+    choice = input("Choose [1/2/3]: ").strip()
+
+    if choice == "1":
+        print()
+        for step in ffmpeg_tools.install_instructions():
+            print(f"  - {step}")
+        print("\nRun Whispry again once FFmpeg is installed.")
+        return False
+
+    if choice == "2":
+        print(f"Installing {ffmpeg_tools.BUNDLED_PACKAGE}...", flush=True)
+        result = ffmpeg_tools.install_bundled_ffmpeg()
+        if result.returncode != 0:
+            print(result.stdout[-2000:], result.stderr[-2000:], file=sys.stderr)
+            return False
+        return ffmpeg_tools.find_ffmpeg() is not None
+
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Transcribe audio locally.")
     parser.add_argument("audio", type=Path, help="Audio or video file")
@@ -87,12 +120,15 @@ def main():
     for problem in validate_config(config):
         parser.error(problem)
 
+    if ffmpeg_tools.find_ffmpeg() is None and not ask_for_ffmpeg():
+        sys.exit(1)
+
     try:
         run_job(config, ConsoleRenderer())
     except KeyboardInterrupt:
         print("\nInterrupted by user.", file=sys.stderr)
         sys.exit(130)
-    except (DeviceUnavailable, ModelLoadError) as error:
+    except (DeviceUnavailable, ModelLoadError, ffmpeg_tools.FFmpegNotFound) as error:
         print(f"\nError: {error}", file=sys.stderr)
         sys.exit(1)
 
