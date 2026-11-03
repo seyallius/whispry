@@ -30,6 +30,26 @@ def test_load_success_echoes_settings():
     assert seen == [("m", "cpu", "int8", 2)]
 
 
+def test_load_uses_the_first_supported_compute_type():
+    seen = []
+
+    def factory(*args):
+        seen.append(args)
+        return FakeModel()
+
+    load = dict(LOAD, device="cuda", compute_types=["int8_float16", "float16", "int8"])
+    out = run_serve(encode(load), factory, supported=lambda device: {"int8", "float32"})
+    assert out[1] == {"type": "loaded", "device": "cuda", "compute_type": "int8"}
+    assert seen == [("m", "cuda", "int8", 2)]
+
+
+def test_load_fails_when_no_preferred_compute_type_is_supported():
+    load = dict(LOAD, compute_types=["float16"])
+    out = run_serve(encode(load), lambda *a: FakeModel(), supported=lambda device: {"int8"})
+    assert out[1]["stage"] == "load"
+    assert "float16" in out[1]["message"] and "int8" in out[1]["message"]
+
+
 def test_load_failure_keeps_worker_alive():
     def factory(*args):
         raise RuntimeError("bad model")

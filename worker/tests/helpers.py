@@ -42,13 +42,17 @@ def transcribe_msg(id=1, **extra):
             "initial_prompt": None, **extra}
 
 
-LOAD = {"type": "load", "model_dir": "m", "device": "cpu", "compute_type": "int8", "cpu_threads": 2}
+LOAD = {"type": "load", "model_dir": "m", "device": "cpu", "compute_types": ["int8"], "cpu_threads": 2}
 
 
-def run_serve(input_bytes, factory):
+def everything_supported(device):
+    return {"int8", "int8_float16", "int8_float32", "float16", "float32"}
+
+
+def run_serve(input_bytes, factory, supported=everything_supported):
     """Run serve() over fixed input; returns the parsed output messages."""
     out = io.BytesIO()
-    serve(io.BytesIO(input_bytes), out, factory)
+    serve(io.BytesIO(input_bytes), out, factory, supported)
     return parse(out.getvalue())
 
 
@@ -63,7 +67,7 @@ class Session:
         read_fd, self.write_fd = os.pipe()
         self.out = io.BytesIO()
         self.thread = threading.Thread(
-            target=serve, args=(os.fdopen(read_fd, "rb"), self.out, factory), daemon=True
+            target=serve, args=(os.fdopen(read_fd, "rb"), self.out, factory, everything_supported), daemon=True
         )
         self.thread.start()
 

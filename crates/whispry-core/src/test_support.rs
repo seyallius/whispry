@@ -94,7 +94,7 @@ def factory(model_dir, device, compute_type, cpu_threads):
     return FakeModel()
 
 
-server.serve(sys.stdin.buffer, sys.stdout.buffer, factory)
+server.serve(sys.stdin.buffer, sys.stdout.buffer, factory, lambda device: {"int8", "float32"})
 "#;
 
 /// The real worker server with a fake model, and the file it records calls in.

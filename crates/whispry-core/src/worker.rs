@@ -17,7 +17,7 @@ use serde::Deserialize;
 use crate::cancel::CancelToken;
 use crate::config::{DeviceChoice, JobConfig};
 use crate::events::{Event, EventSink, Stage};
-use crate::platform::{Device, Os, SystemInfo, resolve_device};
+use crate::platform::{Device, DeviceOption, Os, SystemInfo, resolve_device};
 use crate::process::command;
 
 /// Starting Python and importing CTranslate2 can take a while on a cold disk.
@@ -286,27 +286,29 @@ impl WorkerClient {
         }
     }
 
-    /// Load the model on one device. The worker stays usable after a failure.
+    /// Load the model on one device. The worker uses the first of
+    /// `compute_types` the device supports and returns it. The worker stays
+    /// usable after a failure.
     pub fn load(
         &mut self,
         model_dir: &Path,
         device: Device,
-        compute_type: &str,
+        compute_types: &[&str],
         cpu_threads: usize,
         cancel: &CancelToken,
-    ) -> Result<(), WorkerError> {
+    ) -> Result<String, WorkerError> {
         self.send(
             &serde_json::json!({
                 "type": "load",
                 "model_dir": model_dir,
                 "device": device.as_str(),
-                "compute_type": compute_type,
+                "compute_types": compute_types,
                 "cpu_threads": cpu_threads,
             }),
             &[],
         )?;
         self.wait_for(LOAD_TIMEOUT, cancel, |message| match message {
-            WorkerMessage::Loaded { .. } => Some(Ok(())),
+            WorkerMessage::Loaded { compute_type, .. } => Some(Ok(compute_type)),
             WorkerMessage::Error { stage, message, .. } if stage == "load" => {
                 Some(Err(WorkerError::Load {
                     device: device.as_str().into(),
@@ -462,8 +464,18 @@ fn drain_stderr(stderr: impl Read + Send + 'static, tail: Arc<Mutex<VecDeque<Str
     });
 }
 
+/// Where the model ended up.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadedModel {
+    pub device: Device,
+    pub compute_type: String,
+}
+
 /// Load the model on the requested device. When the device is `auto` and the
 /// GPU fails to load it, the same worker loads it on the CPU instead.
+///
+/// Unless the user picked a compute type, the worker chooses the best one
+/// the device supports.
 pub fn load_model(
     client: &mut WorkerClient,
     model_dir: &Path,
@@ -471,51 +483,63 @@ pub fn load_model(
     system: &SystemInfo,
     on_event: EventSink,
     cancel: &CancelToken,
-) -> Result<(), WorkerError> {
-    let (option, compute_type) =
-        resolve_device(config.device, system, config.compute_type.as_deref()).map_err(|error| {
-            WorkerError::Load {
-                device: config.device.to_string(),
-                message: error.to_string(),
-            }
+) -> Result<LoadedModel, WorkerError> {
+    let (option, _) = resolve_device(config.device, system, config.compute_type.as_deref())
+        .map_err(|error| WorkerError::Load {
+            device: config.device.to_string(),
+            message: error.to_string(),
         })?;
 
     on_event(Event::StageStarted {
         stage: Stage::Model,
-        message: format!("Loading model on {} ({compute_type})...", option.label),
+        message: format!("Loading model on {}...", option.label),
     });
     let start = Instant::now();
 
-    let result = client.load(
-        model_dir,
-        option.device,
-        &compute_type,
-        system.cpu_threads,
-        cancel,
-    );
-    if let Err(error @ WorkerError::Load { .. }) = result {
-        if config.device != DeviceChoice::Auto || option.device == Device::Cpu {
-            return Err(error);
-        }
-        on_event(Event::Log(format!("{error}. Falling back to CPU.")));
-        let (cpu, cpu_compute) = resolve_device(DeviceChoice::Cpu, system, None)
-            .map_err(|error| WorkerError::Protocol(error.to_string()))?;
+    let attempt = |device: &DeviceOption, client: &mut WorkerClient| {
+        let preferred: Vec<&str> = match &config.compute_type {
+            Some(chosen) => vec![chosen.as_str()],
+            None => device.compute_types.clone(),
+        };
         client.load(
             model_dir,
-            cpu.device,
-            &cpu_compute,
+            device.device,
+            &preferred,
             system.cpu_threads,
             cancel,
-        )?;
-    } else {
-        result?;
-    }
+        )
+    };
 
+    let loaded = match attempt(&option, client) {
+        Ok(compute_type) => LoadedModel {
+            device: option.device,
+            compute_type,
+        },
+        Err(error @ WorkerError::Load { .. })
+            if config.device == DeviceChoice::Auto && option.device != Device::Cpu =>
+        {
+            on_event(Event::Log(format!("{error}. Falling back to CPU.")));
+            let (cpu, _) = resolve_device(DeviceChoice::Cpu, system, None)
+                .map_err(|error| WorkerError::Protocol(error.to_string()))?;
+            let compute_type = attempt(&cpu, client)?;
+            LoadedModel {
+                device: cpu.device,
+                compute_type,
+            }
+        }
+        Err(error) => return Err(error),
+    };
+
+    on_event(Event::Log(format!(
+        "Running on {} with compute type {}",
+        loaded.device.as_str(),
+        loaded.compute_type
+    )));
     on_event(Event::StageFinished {
         stage: Stage::Model,
         elapsed: start.elapsed().as_secs_f64(),
     });
-    Ok(())
+    Ok(loaded)
 }
 
 #[cfg(test)]
@@ -647,7 +671,7 @@ mod tests {
         };
         let cancel = CancelToken::new();
         client
-            .load(Path::new("model"), Device::Cpu, "int8", 2, &cancel)
+            .load(Path::new("model"), Device::Cpu, &["int8"], 2, &cancel)
             .unwrap();
 
         let mut updates = Vec::new();
@@ -686,13 +710,49 @@ mod tests {
     }
 
     #[test]
+    fn the_worker_picks_the_first_compute_type_the_device_supports() {
+        let Some((_dir, fake, mut client)) = started("en") else {
+            return;
+        };
+        let used = client
+            .load(
+                Path::new("model"),
+                Device::Cpu,
+                &["int8_float32", "int8"],
+                2,
+                &CancelToken::new(),
+            )
+            .unwrap();
+        // The fake device supports int8 and float32 only.
+        assert_eq!(used, "int8");
+        assert_eq!(fake.calls()[0]["compute_type"], "int8");
+    }
+
+    #[test]
+    fn a_compute_type_nothing_supports_is_a_load_error() {
+        let Some((_dir, _fake, mut client)) = started("en") else {
+            return;
+        };
+        let error = client
+            .load(
+                Path::new("model"),
+                Device::Cpu,
+                &["float16"],
+                2,
+                &CancelToken::new(),
+            )
+            .unwrap_err();
+        assert!(matches!(error, WorkerError::Load { message, .. } if message.contains("float16")));
+    }
+
+    #[test]
     fn a_failed_load_leaves_the_worker_alive_but_without_a_model() {
         let Some((_dir, _fake, mut client)) = started("en") else {
             return;
         };
         let cancel = CancelToken::new();
         let error = client
-            .load(Path::new("model"), Device::Cuda, "float16", 2, &cancel)
+            .load(Path::new("model"), Device::Cuda, &["int8"], 2, &cancel)
             .unwrap_err();
         assert!(
             matches!(&error, WorkerError::Load { device, message }
@@ -713,7 +773,7 @@ mod tests {
         };
         let cancel = CancelToken::new();
         client
-            .load(Path::new("model"), Device::Cpu, "int8", 2, &cancel)
+            .load(Path::new("model"), Device::Cpu, &["int8"], 2, &cancel)
             .unwrap();
 
         let mut segments = 0;

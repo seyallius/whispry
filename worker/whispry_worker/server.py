@@ -27,6 +27,13 @@ def load_whisper_model(model_dir, device, compute_type, cpu_threads):
     )
 
 
+def supported_compute_types(device):
+    """Compute types this machine can run on `device`."""
+    import ctranslate2
+
+    return set(ctranslate2.get_supported_compute_types(device))
+
+
 def _faster_whisper_version():
     try:
         import faster_whisper
@@ -89,7 +96,7 @@ class _Reader(threading.Thread):
             self.cancels.pop(request_id, None)
 
 
-def serve(stdin, stdout, model_factory):
+def serve(stdin, stdout, model_factory, supported_types=supported_compute_types):
     """Run the worker until shutdown, EOF or a protocol error."""
     import numpy
 
@@ -108,7 +115,7 @@ def serve(stdin, stdout, model_factory):
             return
         message, audio, cancel = item
         if message["type"] == "load":
-            model = _load(stdout, model_factory, message)
+            model = _load(stdout, model_factory, supported_types, message)
             continue
         request_id = message.get("id")
         try:
@@ -125,19 +132,33 @@ def serve(stdin, stdout, model_factory):
             reader.forget(request_id)
 
 
-def _load(stdout, model_factory, message):
+def _load(stdout, model_factory, supported_types, message):
     try:
+        compute_type = _choose_compute_type(
+            message["device"], message["compute_types"], supported_types
+        )
         model = model_factory(
-            message["model_dir"], message["device"], message["compute_type"], message["cpu_threads"]
+            message["model_dir"], message["device"], compute_type, message["cpu_threads"]
         )
     except Exception as exc:
         write_message(stdout, {"type": "error", "id": None, "stage": "load", "message": str(exc)})
         return None
     write_message(
-        stdout,
-        {"type": "loaded", "device": message["device"], "compute_type": message["compute_type"]},
+        stdout, {"type": "loaded", "device": message["device"], "compute_type": compute_type}
     )
     return model
+
+
+def _choose_compute_type(device, preferred, supported_types):
+    """The first preferred compute type that `device` supports."""
+    supported = supported_types(device)
+    for compute_type in preferred:
+        if compute_type in supported:
+            return compute_type
+    raise RuntimeError(
+        f"None of the compute types {', '.join(preferred)} is supported on {device} "
+        f"(supported: {', '.join(sorted(supported))})"
+    )
 
 
 def _transcribe(stdout, model, message, samples, cancel):
