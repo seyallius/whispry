@@ -1,5 +1,7 @@
 # Whispry development and transcription recipes.
 
+python := if os_family() == "windows" { ".venv/Scripts/python.exe" } else { ".venv/bin/python" }
+
 default:
     @just --list
 
@@ -9,27 +11,27 @@ setup:
 
 # Show the detected OS and which devices (CPU/GPU) can run Whisper.
 check:
-    ./scripts/run.sh -c "from whispry.core.platform import detect_system; s = detect_system(); print(s.os_label); [print('-', d.label, 'available' if d.available else 'unavailable:', d.reason or ', '.join(d.compute_types)) for d in s.devices]"
+    {{python}} -c "from whispry.core.platform import detect_system; s = detect_system(); print(s.os_label); [print('-', d.label, 'available' if d.available else 'unavailable:', d.reason or ', '.join(d.compute_types)) for d in s.devices]"
 
 # Transcribe with automatic language detection.
 transcribe file model="small":
-    ./scripts/run.sh -m whispry.console "{{file}}" --model "{{model}}"
+    {{python}} -m whispry.console "{{file}}" --model "{{model}}"
 
 # Transcribe Persian speech.
 persian file model="small":
-    ./scripts/run.sh -m whispry.console "{{file}}" --language fa --model "{{model}}"
+    {{python}} -m whispry.console "{{file}}" --language fa --model "{{model}}"
 
 # Transcribe English speech.
 english file model="small":
-    ./scripts/run.sh -m whispry.console "{{file}}" --language en --model "{{model}}"
+    {{python}} -m whispry.console "{{file}}" --language en --model "{{model}}"
 
 # Download and cache a Whisper model.
 download model="small":
-    ./scripts/run.sh -c "from whispry.core.models import ensure_model; print(ensure_model('{{model}}'))"
+    {{python}} -c "from whispry.core.models import ensure_model; print(ensure_model('{{model}}'))"
 
 # Check Python syntax without executing the transcriber.
 lint:
-    ./scripts/run.sh -c "import ast, pathlib; [ast.parse(p.read_text()) for p in pathlib.Path('whispry').rglob('*.py')]"
+    {{python}} -c "import ast, pathlib; [ast.parse(p.read_text()) for p in pathlib.Path('whispry').rglob('*.py')]"
 
 # Remove Python cache files.
 clean:

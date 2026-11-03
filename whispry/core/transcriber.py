@@ -6,6 +6,7 @@ import time
 
 from whispry.core.audio import decode_audio
 from whispry.core.config import BEAM_SIZE, JobConfig
+from whispry.core.cuda_libs import prepare_cuda_libraries
 from whispry.core.events import (
     EventSink,
     Finished,
@@ -38,6 +39,7 @@ class ModelLoadError(RuntimeError):
 
 
 def _load_model(model_dir, device: str, compute_type: str, system: SystemInfo):
+    prepare_cuda_libraries(system.os_name)
     from faster_whisper import WhisperModel
 
     try:

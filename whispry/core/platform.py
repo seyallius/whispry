@@ -8,6 +8,8 @@ import platform
 from dataclasses import dataclass, field
 from functools import lru_cache
 
+from whispry.core.cuda_libs import prepare_cuda_libraries
+
 CPU = "cpu"
 CUDA = "cuda"
 AUTO = "auto"
@@ -18,10 +20,12 @@ PREFERRED_COMPUTE_TYPES = {
     CPU: ("int8", "int8_float32", "float32"),
 }
 
-# Libraries CTranslate2 needs at runtime for CUDA, per OS.
+# Libraries CTranslate2 loads at runtime for CUDA, per OS. On Linux it only
+# needs cuBLAS; the Windows build also uses cuDNN (its own cudnn64_9.dll is
+# just a loader for these).
 CUDA_LIBRARIES = {
-    "Linux": ("libcublas.so.12", "libcudnn.so.9"),
-    "Windows": ("cublas64_12.dll", "cudnn64_9.dll"),
+    "Linux": ("libcublas.so.12",),
+    "Windows": ("cublas64_12.dll", "cudnn_ops64_9.dll", "cudnn_cnn64_9.dll"),
 }
 
 
@@ -123,6 +127,7 @@ def detect_cuda(os_name: str) -> DeviceOption:
 def detect_system() -> SystemInfo:
     """Inspect this machine once. Cached because CUDA probing is slow-ish."""
     os_name = platform.system()
+    prepare_cuda_libraries(os_name)
     os_label = f"{os_name} {platform.release()} ({platform.machine()})"
 
     return SystemInfo(

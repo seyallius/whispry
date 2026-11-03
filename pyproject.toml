@@ -11,6 +11,8 @@ license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
     "faster-whisper==1.2.1",
+    # 4.8.5 is the build verified to need only cuBLAS (not cuDNN) on Linux.
+    "ctranslate2>=4.8.5,<5",
     "numpy>=1.26,<3",
     "huggingface-hub>=0.30,<2",
     "tqdm>=4.66,<5",
@@ -18,9 +20,10 @@ dependencies = [
 
 [project.optional-dependencies]
 # CUDA 12 runtime libraries used by CTranslate2 on NVIDIA GPUs.
+# Linux needs only cuBLAS; the Windows build of CTranslate2 also uses cuDNN.
 gpu = [
-    "nvidia-cublas-cu12; platform_system != 'Darwin'",
-    "nvidia-cudnn-cu12==9.*; platform_system != 'Darwin'",
+    "nvidia-cublas-cu12>=12.4,<13; platform_system == 'Linux' or platform_system == 'Windows'",
+    "nvidia-cudnn-cu12==9.*; platform_system == 'Windows'",
 ]
 dev = ["pytest>=8"]
 
