@@ -1,0 +1,104 @@
+name: Release
+
+# Push a tag like v0.3.0 to build the archives and publish a release.
+# Changes to the release files only build the archives, as a check.
+on:
+  push:
+    tags: ["v*"]
+    branches: ["**"]
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/package.py"
+      - "scripts/setup.py"
+      - "worker/pyproject.toml"
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/package.py"
+      - "scripts/setup.py"
+      - "worker/pyproject.toml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build for ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            binary: whispry
+          - os: windows-latest
+            target: windows-x86_64
+            binary: whispry.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Find the version, and check a tag matches it
+        shell: bash
+        run: |
+          crate_version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$crate_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match version $crate_version in Cargo.toml" >&2
+            exit 1
+          fi
+          echo "VERSION=$crate_version" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        run: python scripts/package.py --binary target/release/${{ matrix.binary }} --version "$env:VERSION" --target ${{ matrix.target }} --out dist
+        if: runner.os == 'Windows'
+
+      - name: Package
+        run: python scripts/package.py --binary target/release/${{ matrix.binary }} --version "$VERSION" --target ${{ matrix.target }} --out dist
+        if: runner.os != 'Windows'
+
+      - name: Check the archive starts
+        shell: bash
+        run: |
+          mkdir unpacked
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z x dist/*.zip -ounpacked > /dev/null
+          else
+            tar xzf dist/*.tar.gz -C unpacked
+          fi
+          cd unpacked/whispry-*
+          ./${{ matrix.binary }} --version
+          test -f setup.py
+          test -f worker/pyproject.toml
+          python setup.py --help > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: archive-*
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "Whispry ${GITHUB_REF_NAME#v}" --generate-notes
