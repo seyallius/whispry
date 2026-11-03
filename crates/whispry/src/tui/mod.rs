@@ -4,6 +4,7 @@
 mod app;
 mod file_picker;
 mod input;
+mod run;
 mod services;
 mod setup;
 
@@ -19,7 +20,6 @@ use ratatui::crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind,
 };
 use ratatui::crossterm::execute;
-use whispry_core::config::JobConfig;
 
 use app::App;
 use services::RealServices;
@@ -27,19 +27,20 @@ use services::RealServices;
 /// How often the screen is redrawn when nothing happens.
 const TICK: Duration = Duration::from_millis(100);
 
-/// Open the terminal UI. Returns the job the user chose to start, if any.
-pub fn run(initial_file: Option<PathBuf>) -> io::Result<Option<JobConfig>> {
+/// Open the terminal UI and run until the user quits.
+pub fn run(initial_file: Option<PathBuf>) -> io::Result<()> {
     let mut app = App::new(Box::new(RealServices::new()), initial_file);
     let mut terminal = ratatui::init();
     let _ = execute!(io::stdout(), EnableBracketedPaste);
     let result = event_loop(&mut terminal, &mut app);
     let _ = execute!(io::stdout(), DisableBracketedPaste);
     ratatui::restore();
-    result.map(|()| app.into_outcome())
+    result
 }
 
 fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
     while !app.is_done() {
+        app.poll();
         terminal.draw(|frame| app.render(frame))?;
         if event::poll(TICK)? {
             match event::read()? {

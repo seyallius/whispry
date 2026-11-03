@@ -1,13 +1,20 @@
+use std::cell::RefCell;
 use std::path::Path;
+use std::sync::mpsc::Sender;
+use std::time::Duration;
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use whispry_core::cancel::{CancelToken, JobCancelled};
 use whispry_core::config::{DeviceChoice, JobConfig, validate_config};
+use whispry_core::events::{Event, Stage};
 use whispry_core::platform::{Os, SystemInfo, cuda_option, detect_cpu};
+use whispry_core::transcriber::{JobError, JobSummary};
+use whispry_core::worker::WorkerError;
 
 use super::app::App;
-use super::services::Services;
+use super::services::{JobMessage, Services};
 use super::setup::normalize_path;
 
 struct FakeServices {
@@ -44,6 +51,63 @@ impl Services for FakeServices {
     fn validate(&self, config: &JobConfig) -> Vec<String> {
         validate_config(config)
     }
+    fn start_job(&self, config: JobConfig, cancel: CancelToken, sender: Sender<JobMessage>) {
+        STARTED.with(|started| {
+            started.borrow_mut().push(Started {
+                config,
+                cancel,
+                sender,
+            })
+        });
+    }
+}
+
+/// A job the app asked the fake to run. The test plays the job's part by
+/// sending messages through `sender`.
+struct Started {
+    config: JobConfig,
+    cancel: CancelToken,
+    sender: Sender<JobMessage>,
+}
+
+thread_local! {
+    // Each test runs on its own thread, so each sees only its own jobs.
+    static STARTED: RefCell<Vec<Started>> = const { RefCell::new(Vec::new()) };
+}
+
+fn jobs_started() -> usize {
+    STARTED.with(|started| started.borrow().len())
+}
+
+fn last_started() -> JobConfig {
+    STARTED.with(|started| {
+        started
+            .borrow()
+            .last()
+            .expect("no job was started")
+            .config
+            .clone()
+    })
+}
+
+fn last_cancel() -> CancelToken {
+    STARTED.with(|started| started.borrow().last().unwrap().cancel.clone())
+}
+
+fn send(message: JobMessage) {
+    STARTED.with(|started| {
+        started
+            .borrow()
+            .last()
+            .unwrap()
+            .sender
+            .send(message)
+            .unwrap()
+    });
+}
+
+fn send_event(event: Event) {
+    send(JobMessage::Event(event));
 }
 
 fn press(app: &mut App, code: KeyCode) {
@@ -119,8 +183,7 @@ fn auto_names_the_gpu_when_there_is_one() {
 fn starting_returns_the_defaults_for_a_valid_file() {
     let (mut app, _dir, audio) = app_with_file(FakeServices::new(0));
     ctrl(&mut app, 's');
-    assert!(app.is_done());
-    let config = app.into_outcome().unwrap();
+    let config = last_started();
     assert_eq!(config.audio, audio);
     assert_eq!(config.model, "small");
     assert_eq!(config.language, None);
@@ -133,12 +196,12 @@ fn starting_returns_the_defaults_for_a_valid_file() {
 fn problems_are_listed_and_the_screen_stays() {
     let mut app = App::new(Box::new(FakeServices::new(0)), None);
     ctrl(&mut app, 's');
-    assert!(!app.is_done());
+    assert_eq!(jobs_started(), 0);
     assert!(screen(&app, 100, 30).contains("Choose a file to transcribe"));
 
     type_text(&mut app, "/nonexistent/talk.mp3");
     ctrl(&mut app, 's');
-    assert!(!app.is_done());
+    assert_eq!(jobs_started(), 0);
     assert!(screen(&app, 100, 30).contains("File not found"));
 }
 
@@ -148,7 +211,7 @@ fn a_missing_worker_is_explained() {
     services.worker = false;
     let (mut app, _dir, _) = app_with_file(services);
     ctrl(&mut app, 's');
-    assert!(!app.is_done());
+    assert_eq!(jobs_started(), 0);
     assert!(screen(&app, 110, 32).contains("worker was not found"));
 }
 
@@ -163,7 +226,7 @@ fn choices_are_made_with_tab_and_the_arrow_keys() {
     press(&mut app, KeyCode::Tab); // device
     press(&mut app, KeyCode::Right); // CPU
     ctrl(&mut app, 's');
-    let config = app.into_outcome().unwrap();
+    let config = last_started();
     assert_eq!(config.model, "medium");
     assert_eq!(config.language.as_deref(), Some("fa"));
     assert_eq!(config.device, DeviceChoice::Cpu);
@@ -178,7 +241,7 @@ fn the_unavailable_gpu_cannot_be_selected() {
     press(&mut app, KeyCode::Right); // CPU
     press(&mut app, KeyCode::Right); // would be the GPU; wraps to Auto
     ctrl(&mut app, 's');
-    assert_eq!(app.into_outcome().unwrap().device, DeviceChoice::Auto);
+    assert_eq!(last_started().device, DeviceChoice::Auto);
 }
 
 #[test]
@@ -189,7 +252,7 @@ fn the_gpu_can_be_selected_when_available() {
     }
     press(&mut app, KeyCode::Left); // wraps to the GPU
     ctrl(&mut app, 's');
-    assert_eq!(app.into_outcome().unwrap().device, DeviceChoice::Cuda);
+    assert_eq!(last_started().device, DeviceChoice::Cuda);
 }
 
 #[test]
@@ -207,7 +270,7 @@ fn advanced_options_open_on_demand_and_set_the_compute_type_and_chunk_length() {
     ctrl(&mut app, 'u');
     type_text(&mut app, "5");
     ctrl(&mut app, 's');
-    let config = app.into_outcome().unwrap();
+    let config = last_started();
     assert_eq!(config.compute_type.as_deref(), Some("int8"));
     assert_eq!(config.chunk_minutes, 5.0);
 }
@@ -223,7 +286,7 @@ fn a_chunk_length_that_is_not_a_number_is_reported() {
     press(&mut app, KeyCode::Tab);
     type_text(&mut app, "x");
     ctrl(&mut app, 's');
-    assert!(!app.is_done());
+    assert_eq!(jobs_started(), 0);
     assert!(screen(&app, 100, 40).contains("must be a number"));
 }
 
@@ -235,7 +298,7 @@ fn pasting_a_quoted_path_works() {
     let mut app = App::new(Box::new(FakeServices::new(0)), None);
     app.on_paste(&format!("\"{}\"\n", audio.display()));
     ctrl(&mut app, 's');
-    assert_eq!(app.into_outcome().unwrap().audio, audio);
+    assert_eq!(last_started().audio, audio);
 }
 
 #[test]
@@ -243,7 +306,7 @@ fn the_start_button_starts_with_enter() {
     let (mut app, _dir, _) = app_with_file(FakeServices::new(0));
     press(&mut app, KeyCode::BackTab); // wraps to the start button
     press(&mut app, KeyCode::Enter);
-    assert!(app.into_outcome().is_some());
+    assert_eq!(jobs_started(), 1);
 }
 
 #[test]
@@ -252,7 +315,7 @@ fn ctrl_q_and_ctrl_c_quit_without_a_job() {
         let (mut app, _dir, _) = app_with_file(FakeServices::new(0));
         ctrl(&mut app, key);
         assert!(app.is_done());
-        assert!(app.into_outcome().is_none());
+        assert_eq!(jobs_started(), 0);
     }
 }
 
@@ -286,10 +349,7 @@ fn browsing_fills_in_the_chosen_file() {
     press(&mut app, KeyCode::Enter);
     assert!(!screen(&app, 100, 30).contains("Choose a file"));
     ctrl(&mut app, 's');
-    assert_eq!(
-        app.into_outcome().unwrap().audio,
-        dir.path().join("lecture.mp3")
-    );
+    assert_eq!(last_started().audio, dir.path().join("lecture.mp3"));
 }
 
 #[test]
@@ -299,7 +359,7 @@ fn cancelling_the_browser_keeps_the_file_field() {
     press(&mut app, KeyCode::Esc);
     assert!(!screen(&app, 100, 30).contains("Choose a file"));
     ctrl(&mut app, 's');
-    assert_eq!(app.into_outcome().unwrap().audio, audio);
+    assert_eq!(last_started().audio, audio);
 }
 
 #[test]
@@ -308,5 +368,275 @@ fn keys_go_to_the_browser_while_it_is_open() {
     ctrl(&mut app, 'o');
     press(&mut app, KeyCode::Tab);
     ctrl(&mut app, 's'); // ignored by the browser, so no job starts
+    assert_eq!(jobs_started(), 0);
+}
+
+// ----- the run screen -----
+
+fn running_app() -> (App, tempfile::TempDir) {
+    let (mut app, dir, _) = app_with_file(FakeServices::new(0));
+    ctrl(&mut app, 's');
+    assert_eq!(jobs_started(), 1);
+    (app, dir)
+}
+
+fn summary(output: &Path) -> JobSummary {
+    JobSummary {
+        output: output.to_path_buf(),
+        audio_duration: 125.0,
+        elapsed: 9.0,
+    }
+}
+
+fn deliver(app: &mut App) {
+    app.poll();
+}
+
+#[test]
+fn starting_shows_the_run_screen_and_a_cancel_button() {
+    let (app, _dir) = running_app();
+    let text = screen(&app, 100, 34);
+    for expected in [
+        "Transcribing",
+        "Progress",
+        "Transcript",
+        "Activity",
+        "Cancel",
+        "talk.mp3",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+    }
+    assert!(!text.contains("Start transcription"));
+}
+
+#[test]
+fn events_fill_in_the_transcript_the_activity_and_the_progress() {
+    let (mut app, _dir) = running_app();
+    send_event(Event::StageStarted {
+        stage: Stage::Transcribe,
+        message: "Transcribing...".into(),
+    });
+    send_event(Event::LanguageDetected {
+        language: "fa".into(),
+        probability: 0.93,
+    });
+    send_event(Event::Progress {
+        stage: Stage::Transcribe,
+        completed: 30.0,
+        total: Some(120.0),
+        unit: "s".into(),
+    });
+    send_event(Event::SegmentReady {
+        start: 65.0,
+        end: 70.0,
+        text: "hello there".into(),
+    });
+    deliver(&mut app);
+
+    let text = screen(&app, 100, 34);
+    assert!(text.contains("[01:05] hello there"), "{text}");
+    assert!(text.contains("Language: fa (93%)"), "{text}");
+    assert!(text.contains("25%"), "{text}");
+    assert!(text.contains("Audio 00:30 / 02:00"), "{text}");
+}
+
+#[test]
+fn a_finished_job_shows_where_the_text_was_saved() {
+    let (mut app, dir) = running_app();
+    let output = dir.path().join("talk.txt");
+    send(JobMessage::Done(Ok(summary(&output))));
+    deliver(&mut app);
+
+    let text = screen(&app, 100, 34);
+    assert!(text.contains("Finished"), "{text}");
+    assert!(text.contains("Transcribed 02:05 of audio"), "{text}");
+    assert!(text.contains("talk.txt"), "{text}");
+    assert!(
+        text.contains("New transcription") && text.contains("Quit"),
+        "{text}"
+    );
+    assert!(!text.contains("Retry on CPU"));
+}
+
+#[test]
+fn escape_cancels_and_the_job_reports_where_it_stopped() {
+    let (mut app, dir) = running_app();
+    press(&mut app, KeyCode::Esc);
+    assert!(last_cancel().is_cancelled());
+    assert!(screen(&app, 100, 34).contains("Cancelling"));
+
+    let output = dir.path().join("talk.txt");
+    send(JobMessage::Done(Err(JobError::Cancelled(JobCancelled {
+        output: Some(output.clone()),
+        position: 42.0,
+    }))));
+    deliver(&mut app);
+    let text = screen(&app, 100, 34);
+    assert!(
+        text.contains("Cancelled") && text.contains("saved in"),
+        "{text}"
+    );
     assert!(!app.is_done());
+}
+
+#[test]
+fn a_failure_offers_a_retry_on_the_cpu_that_reruns_the_same_job() {
+    let (mut app, _dir) = running_app();
+    send(JobMessage::Done(Err(JobError::Worker(WorkerError::Load {
+        device: "cuda".into(),
+        message: "out of memory".into(),
+    }))));
+    deliver(&mut app);
+    let text = screen(&app, 100, 34);
+    assert!(
+        text.contains("Failed") && text.contains("out of memory"),
+        "{text}"
+    );
+    assert!(text.contains("Retry on CPU"), "{text}");
+
+    press(&mut app, KeyCode::Enter); // the first button
+    assert_eq!(jobs_started(), 2);
+    let retry = last_started();
+    assert_eq!(retry.device, DeviceChoice::Cpu);
+    assert_eq!(
+        retry.audio,
+        STARTED.with(|s| s.borrow()[0].config.audio.clone())
+    );
+    assert!(screen(&app, 100, 34).contains("Transcribing"));
+}
+
+#[test]
+fn a_failure_on_the_cpu_has_nothing_to_retry() {
+    let (mut app, _dir, _) = app_with_file(FakeServices::new(0));
+    for _ in 0..3 {
+        press(&mut app, KeyCode::Tab);
+    }
+    press(&mut app, KeyCode::Right); // CPU
+    ctrl(&mut app, 's');
+    send(JobMessage::Done(Err(JobError::Worker(
+        WorkerError::Exited("crashed".into()),
+    ))));
+    deliver(&mut app);
+    assert!(!screen(&app, 100, 34).contains("Retry on CPU"));
+}
+
+#[test]
+fn new_transcription_returns_to_the_setup_screen_with_the_same_choices() {
+    let (mut app, dir) = running_app();
+    send(JobMessage::Done(Ok(summary(&dir.path().join("talk.txt")))));
+    deliver(&mut app);
+    press(&mut app, KeyCode::Enter); // "New transcription" is first
+    let text = screen(&app, 100, 30);
+    assert!(
+        text.contains("Start transcription") && text.contains("talk.mp3"),
+        "{text}"
+    );
+}
+
+#[test]
+fn quit_ends_the_program_once_the_job_is_over() {
+    let (mut app, dir) = running_app();
+    send(JobMessage::Done(Ok(summary(&dir.path().join("talk.txt")))));
+    deliver(&mut app);
+    press(&mut app, KeyCode::Char('q'));
+    assert!(app.is_done());
+}
+
+#[test]
+fn ctrl_q_during_a_job_cancels_it_and_quits_when_it_has_stopped() {
+    let (mut app, _dir) = running_app();
+    ctrl(&mut app, 'q');
+    assert!(last_cancel().is_cancelled());
+    assert!(!app.is_done(), "waits for the job to stop");
+
+    send(JobMessage::Done(Err(JobError::Cancelled(JobCancelled {
+        output: None,
+        position: 0.0,
+    }))));
+    deliver(&mut app);
+    assert!(app.is_done());
+}
+
+#[test]
+fn a_second_ctrl_q_quits_without_waiting() {
+    let (mut app, _dir) = running_app();
+    ctrl(&mut app, 'q');
+    ctrl(&mut app, 'q');
+    assert!(app.is_done());
+}
+
+#[test]
+fn a_job_thread_that_vanishes_is_reported_as_a_failure() {
+    let (mut app, _dir) = running_app();
+    STARTED.with(|started| started.borrow_mut().clear()); // drops the sender
+    deliver(&mut app);
+    assert!(screen(&app, 100, 34).contains("Failed"));
+}
+
+#[test]
+fn the_time_left_comes_from_the_speed_so_far() {
+    use super::run::RunState;
+    use std::time::Instant;
+
+    let (sender, receiver) = std::sync::mpsc::channel::<JobMessage>();
+    let start = Instant::now();
+    let mut run = RunState::new(JobConfig::new("a.mp3"), CancelToken::new(), receiver, start);
+    let at = |seconds: u64| start + Duration::from_secs(seconds);
+
+    run.apply(
+        &Event::StageStarted {
+            stage: Stage::Transcribe,
+            message: "Transcribing...".into(),
+        },
+        at(5),
+    );
+    run.apply(
+        &Event::Progress {
+            stage: Stage::Transcribe,
+            completed: 40.0,
+            total: Some(100.0),
+            unit: "s".into(),
+        },
+        at(25),
+    );
+    // 40 s of audio in the 20 s since transcription began: 2x, 30 s left.
+    assert_eq!(
+        run.timing_line(at(25)),
+        "Elapsed 00:25 · Audio 00:40 / 01:40 · 2.0x realtime · about 00:30 left"
+    );
+    // Too early for a trustworthy speed.
+    assert_eq!(
+        run.timing_line(at(6)),
+        "Elapsed 00:06 · Audio 00:40 / 01:40"
+    );
+    drop(sender);
+}
+
+#[test]
+fn downloads_show_bytes_instead_of_audio() {
+    use super::run::RunState;
+    use std::time::Instant;
+
+    let (_sender, receiver) = std::sync::mpsc::channel::<JobMessage>();
+    let start = Instant::now();
+    let mut run = RunState::new(JobConfig::new("a.mp3"), CancelToken::new(), receiver, start);
+    run.apply(
+        &Event::Progress {
+            stage: Stage::Model,
+            completed: 512.0 * 1024.0 * 1024.0,
+            total: Some(1024.0 * 1024.0 * 1024.0),
+            unit: "B".into(),
+        },
+        start,
+    );
+    assert_eq!(run.timing_line(start), "Elapsed 00:00 · 512.0 MB / 1.0 GB");
+    assert_eq!(run.ratio(), Some(0.5));
+}
+
+#[test]
+fn long_lines_wrap_at_the_width() {
+    use super::run::wrap;
+    assert_eq!(wrap("one two three", 7), ["one two", "three"]);
+    assert_eq!(wrap("abcdefghij", 4), ["abcd", "efgh", "ij"]);
+    assert_eq!(wrap("", 5), [""]);
 }

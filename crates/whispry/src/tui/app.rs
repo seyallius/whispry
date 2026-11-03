@@ -1,12 +1,16 @@
-//! The terminal UI as a whole: which screen is showing and what it returns.
+//! The terminal UI as a whole: which screen is showing.
 
 use std::path::PathBuf;
+use std::sync::mpsc::channel;
+use std::time::Instant;
 
 use ratatui::Frame;
 use ratatui::crossterm::event::KeyEvent;
+use whispry_core::cancel::CancelToken;
 use whispry_core::config::JobConfig;
 
 use super::file_picker::{PickerAction, PickerState};
+use super::run::{RunAction, RunState};
 use super::services::Services;
 use super::setup::{SetupAction, SetupState};
 
@@ -14,7 +18,8 @@ pub struct App {
     services: Box<dyn Services>,
     setup: SetupState,
     picker: Option<PickerState>,
-    outcome: Option<JobConfig>,
+    /// The run screen, once a job has been started.
+    run: Option<RunState>,
     quit: bool,
 }
 
@@ -24,7 +29,7 @@ impl App {
             services,
             setup: SetupState::new(initial_file.as_deref()),
             picker: None,
-            outcome: None,
+            run: None,
             quit: false,
         }
     }
@@ -33,12 +38,34 @@ impl App {
         self.quit
     }
 
-    /// The job the user chose to start, if they did.
-    pub fn into_outcome(self) -> Option<JobConfig> {
-        self.outcome
+    fn start_job(&mut self, config: JobConfig) {
+        let (sender, receiver) = channel();
+        let cancel = CancelToken::new();
+        self.services
+            .start_job(config.clone(), cancel.clone(), sender);
+        self.run = Some(RunState::new(config, cancel, receiver, Instant::now()));
+    }
+
+    /// Take in whatever the running job has reported. Call this often.
+    pub fn poll(&mut self) {
+        if let Some(run) = &mut self.run {
+            run.poll(Instant::now());
+            if run.quit_when_stopped() && run.status.is_over() {
+                self.quit = true;
+            }
+        }
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        if let Some(run) = &mut self.run {
+            match run.handle_key(&key) {
+                RunAction::None => {}
+                RunAction::New => self.run = None,
+                RunAction::Quit => self.quit = true,
+                RunAction::Retry(config) => self.start_job(config),
+            }
+            return;
+        }
         if let Some(picker) = &mut self.picker {
             match picker.handle_key(&key) {
                 PickerAction::None => {}
@@ -56,21 +83,22 @@ impl App {
             SetupAction::Browse => {
                 self.picker = Some(PickerState::open(&self.setup.browse_start()));
             }
-            SetupAction::Start(config) => {
-                self.outcome = Some(config);
-                self.quit = true;
-            }
+            SetupAction::Start(config) => self.start_job(config),
         }
     }
 
     pub fn on_paste(&mut self, text: &str) {
-        if self.picker.is_none() {
+        if self.run.is_none() && self.picker.is_none() {
             self.setup.handle_paste(text);
         }
     }
 
     pub fn render(&self, frame: &mut Frame) {
         let area = frame.area();
+        if let Some(run) = &self.run {
+            run.render(frame, area, Instant::now());
+            return;
+        }
         self.setup.render(frame, area, self.services.as_ref());
         if let Some(picker) = &self.picker {
             picker.render(frame, area);

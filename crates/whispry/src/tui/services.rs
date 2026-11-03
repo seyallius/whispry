@@ -4,10 +4,21 @@
 //! Everything it needs to know or do goes through this trait, so tests can
 //! replace it with a fake.
 
+use std::sync::mpsc::Sender;
+
+use whispry_core::cancel::CancelToken;
 use whispry_core::config::{JobConfig, validate_config};
+use whispry_core::events::Event;
 use whispry_core::models::find_cached_model;
 use whispry_core::platform::SystemInfo;
-use whispry_core::transcriber::JobEnvironment;
+use whispry_core::transcriber::{JobEnvironment, JobError, JobSummary, run_job};
+
+/// What a running job sends back to the UI.
+pub enum JobMessage {
+    Event(Event),
+    /// The job is over. This is always the last message.
+    Done(Result<JobSummary, JobError>),
+}
 
 pub trait Services {
     fn system(&self) -> &SystemInfo;
@@ -15,6 +26,8 @@ pub trait Services {
     fn worker_available(&self) -> bool;
     fn is_model_downloaded(&self, model: &str) -> bool;
     fn validate(&self, config: &JobConfig) -> Vec<String>;
+    /// Run a job in the background, sending its events and result to `sender`.
+    fn start_job(&self, config: JobConfig, cancel: CancelToken, sender: Sender<JobMessage>);
 }
 
 /// The real thing, backed by the core.
@@ -45,5 +58,21 @@ impl Services for RealServices {
 
     fn validate(&self, config: &JobConfig) -> Vec<String> {
         validate_config(config)
+    }
+
+    fn start_job(&self, config: JobConfig, cancel: CancelToken, sender: Sender<JobMessage>) {
+        let environment = self.environment.clone();
+        std::thread::spawn(move || {
+            let events = sender.clone();
+            let result = run_job(
+                &config,
+                &environment,
+                &mut |event| {
+                    let _ = events.send(JobMessage::Event(event));
+                },
+                &cancel,
+            );
+            let _ = sender.send(JobMessage::Done(result));
+        });
     }
 }

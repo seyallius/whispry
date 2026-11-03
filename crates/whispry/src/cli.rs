@@ -183,17 +183,12 @@ fn transcribe(args: TranscribeArgs) -> ExitCode {
         usage_error(problem);
     }
 
-    run_config(&config)
-}
-
-/// Run one job in the terminal, printing its progress.
-fn run_config(config: &JobConfig) -> ExitCode {
     let cancel = cancel_on_ctrl_c();
     let mut renderer = ConsoleRenderer::new();
     let environment = JobEnvironment::detect();
 
     match run_job(
-        config,
+        &config,
         &environment,
         &mut |event| renderer.handle(&event),
         &cancel,
@@ -224,8 +219,7 @@ fn open_tui(audio: Option<PathBuf>) -> ExitCode {
         return ExitCode::FAILURE;
     }
     match crate::tui::run(audio) {
-        Ok(Some(config)) => run_config(&config),
-        Ok(None) => ExitCode::SUCCESS,
+        Ok(()) => ExitCode::SUCCESS,
         Err(error) => fail(error),
     }
 }
