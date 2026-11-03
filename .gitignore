@@ -30,3 +30,6 @@ models/
 .idea/
 .vscode/
 .DS_Store
+
+# Rust
+target/

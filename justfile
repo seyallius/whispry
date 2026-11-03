@@ -42,3 +42,18 @@ lint:
 # Remove Python cache files.
 clean:
     {{python}} -c "import pathlib, shutil; [shutil.rmtree(p) for p in pathlib.Path('.').rglob('__pycache__') if '.venv' not in p.parts]"
+
+# --- Rust workspace ---
+
+# Build the Rust binary (pass --release for an optimized build).
+rs-build *flags:
+    cargo build {{flags}}
+
+# Run the Rust test suite.
+rs-test *args:
+    cargo test --workspace {{args}}
+
+# Check formatting and lints.
+rs-lint:
+    cargo fmt --all --check
+    cargo clippy --workspace --all-targets -- -D warnings

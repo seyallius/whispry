@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/whispry-core", "crates/whispry"]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+license-file = "LICENSE"
+repository = "https://github.com/seyallius/whispry"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.release]
+lto = "thin"
+strip = true
