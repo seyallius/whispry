@@ -6,6 +6,8 @@
 
 pub mod config;
 pub mod events;
+pub mod platform;
+mod process;
 pub mod timestamps;
 
 /// The version of Whispry, taken from the workspace manifest.
