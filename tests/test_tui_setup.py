@@ -5,6 +5,7 @@ from textual.widgets import Input, RadioButton, Select, Static
 
 from fakes import CPU_SYSTEM
 from whispry.core.events import Finished
+from whispry.core.ffmpeg import FFmpeg
 from whispry.core.platform import CUDA, DeviceOption, SystemInfo
 from whispry.tui.app import WhispryApp
 from whispry.tui.services import Services
@@ -21,12 +22,12 @@ GPU_SYSTEM = SystemInfo(
 
 
 def services(system=CPU_SYSTEM, **overrides):
-    return replace(
-        Services(),
-        detect_system=lambda: system,
-        is_model_downloaded=lambda name: name == "small",
-        **overrides,
-    )
+    defaults = {
+        "detect_system": lambda: system,
+        "is_model_downloaded": lambda name: name == "small",
+        "find_ffmpeg": lambda: FFmpeg("ffmpeg", "ffprobe", "system"),
+    }
+    return replace(Services(), **{**defaults, **overrides})
 
 
 def run(app, interact):

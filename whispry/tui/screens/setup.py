@@ -29,6 +29,7 @@ from whispry.core.config import (
     JobConfig,
 )
 from whispry.core.platform import AUTO, CPU, CUDA, DeviceUnavailable
+from whispry.tui.screens.ffmpeg import FFmpegScreen
 from whispry.tui.screens.file_picker import FilePickerScreen
 
 DEFAULT_COMPUTE = "default"
@@ -165,8 +166,18 @@ class SetupScreen(Screen):
     def action_start(self) -> None:
         config, problems = self._build_config()
         self.query_one("#errors", Static).update("\n".join(problems))
-        if not problems:
+        if problems:
+            return
+
+        if self.services.find_ffmpeg():
             self.app.start_job(config)
+            return
+
+        def resolved(available: bool | None) -> None:
+            if available:
+                self.app.start_job(config)
+
+        self.app.push_screen(FFmpegScreen(), resolved)
 
     def _build_config(self) -> tuple[JobConfig | None, list[str]]:
         raw_path = self.query_one("#file", Input).value.strip().strip('"')

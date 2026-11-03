@@ -8,6 +8,7 @@ asking.
 
 from __future__ import annotations
 
+import importlib
 import platform
 import re
 import shutil
@@ -76,11 +77,15 @@ def require_ffmpeg() -> FFmpeg:
 
 def install_bundled_ffmpeg() -> subprocess.CompletedProcess:
     """pip-install the bundled FFmpeg into the running Python environment."""
-    return subprocess.run(
+    result = subprocess.run(
         [sys.executable, "-m", "pip", "install", BUNDLED_PACKAGE],
         capture_output=True,
         text=True,
+        creationflags=subprocess_flags(),
     )
+    # Let this already-running process import the newly installed package.
+    importlib.invalidate_caches()
+    return result
 
 
 def _linux_distribution_ids() -> set[str]:
@@ -102,8 +107,8 @@ def install_instructions(os_name: str | None = None) -> list[str]:
 
     if os_name == "Windows":
         return [
-            "Open PowerShell and run:  winget install --id Gyan.FFmpeg -e",
-            "  (or: choco install ffmpeg   /   scoop install ffmpeg)",
+            "Open PowerShell and run:  winget install --id Gyan.FFmpeg -e   "
+            "(or, if you use them: choco install ffmpeg / scoop install ffmpeg)",
             "Manual alternative: download a release build from "
             "https://www.gyan.dev/ffmpeg/builds/, extract it (e.g. to C:\\ffmpeg), "
             "then add C:\\ffmpeg\\bin to PATH via Settings > System > About > "
