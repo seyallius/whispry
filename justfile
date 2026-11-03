@@ -1,59 +1,47 @@
-# Whispry developer recipes: setup, dependencies, checks.
-# Users don't need just: run `python3 scripts/setup.py`, then `whispry`.
+# Whispry developer recipes. Users don't need just: see the README.
 
-python := if os_family() == "windows" { ".venv/Scripts/python.exe" } else { ".venv/bin/python" }
+python := if os_family() == "windows" { justfile_directory() + "/.venv/Scripts/python.exe" } else { justfile_directory() + "/.venv/bin/python" }
 system_python := if os_family() == "windows" { "python" } else { "python3" }
 
 default:
     @just --list
 
-# Create .venv and install Whispry with dev tools (GPU support auto-detected; pass --gpu or --cpu to override).
+# Create .venv with the worker and its test tools (GPU libraries are detected; pass --gpu or --cpu to override).
 setup *flags:
     {{system_python}} scripts/setup.py --dev {{flags}}
 
-# Reinstall dependencies after changing pyproject.toml.
-deps *extras="dev":
-    {{python}} -m pip install -e ".[{{extras}}]"
+# Build the program (pass --release for an optimized build).
+build *flags:
+    cargo build {{flags}}
 
-# Install the bundled FFmpeg build into .venv.
-deps-ffmpeg:
-    {{python}} -m pip install -e ".[ffmpeg]"
+# Run Whispry from the checkout (no arguments opens the terminal UI).
+run *args:
+    cargo run -q -- {{args}}
 
-# Show the detected OS, devices (CPU/GPU), and FFmpeg.
+# Run every test: the Rust crates, the worker and the scripts.
+test:
+    cargo test --workspace
+    cd worker && {{python}} -m pytest -q
+    {{python}} -m pytest -q scripts
+
+# Check formatting and lints.
+lint:
+    cargo fmt --all --check
+    cargo clippy --workspace --all-targets -- -D warnings
+
+# Show the detected OS, devices (CPU/GPU), FFmpeg and worker.
 check:
-    {{python}} -m whispry devices
+    cargo run -q -- devices
 
 # Download and cache a Whisper model.
 download model="small":
-    {{python}} -m whispry download {{model}}
+    cargo run -q -- download {{model}}
 
-# Run Whispry from the checkout (no args opens the TUI).
-run *args:
-    {{python}} -m whispry {{args}}
+# Build a release archive for this machine (version from Cargo.toml).
+package target:
+    cargo build --release
+    {{python}} scripts/package.py --binary target/release/whispry --version "$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" --target {{target}}
 
-# Run the test suite.
-test *args:
-    {{python}} -m pytest {{args}}
-
-# Byte-compile every module to catch syntax errors.
-lint:
-    {{python}} -m compileall -q whispry tests scripts
-
-# Remove Python cache files.
+# Remove build output.
 clean:
-    {{python}} -c "import pathlib, shutil; [shutil.rmtree(p) for p in pathlib.Path('.').rglob('__pycache__') if '.venv' not in p.parts]"
-
-# --- Rust workspace ---
-
-# Build the Rust binary (pass --release for an optimized build).
-rs-build *flags:
-    cargo build {{flags}}
-
-# Run the Rust test suite.
-rs-test *args:
-    cargo test --workspace {{args}}
-
-# Check formatting and lints.
-rs-lint:
-    cargo fmt --all --check
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clean
