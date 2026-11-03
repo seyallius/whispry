@@ -55,6 +55,29 @@ def count_gpus(listing: str) -> int:
     return sum(1 for line in listing.splitlines() if line.strip().startswith("GPU "))
 
 
+def required_cuda_libraries(platform: str = sys.platform) -> list[str]:
+    """The files the GPU needs, the same ones the whispry program looks for."""
+    if platform == "win32":
+        return ["cublas64_12.dll", "cudnn_ops64_9.dll", "cudnn_cnn64_9.dll"]
+    return ["libcublas.so.12"]
+
+
+def cuda_search_dirs(platform: str = sys.platform, environ=os.environ) -> list[Path]:
+    """Folders the system already searches for libraries."""
+    names = ["PATH"] if platform == "win32" else ["LD_LIBRARY_PATH"]
+    dirs = [Path(part) for name in names for part in environ.get(name, "").split(os.pathsep) if part]
+    if platform != "win32":
+        dirs += [Path(p) for p in ("/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib")]
+    return dirs
+
+
+def system_has_cuda_libraries(platform: str = sys.platform, environ=os.environ) -> bool:
+    """True when every GPU library is already installed on this computer."""
+    dirs = cuda_search_dirs(platform, environ)
+    return all(any((folder / name).is_file() for folder in dirs)
+               for name in required_cuda_libraries(platform))
+
+
 def detect_gpu() -> bool:
     try:
         result = subprocess.run(
@@ -110,6 +133,13 @@ def main(argv: list[str] | None = None) -> int:
         gpu = detect_gpu()
     print(f"NVIDIA GPU libraries: {'yes' if gpu else 'no'}"
           + ("" if args.gpu or args.cpu else " (detected automatically; use --gpu or --cpu to override)"))
+    if gpu and not args.gpu and system_has_cuda_libraries():
+        print("The CUDA libraries are already installed on this computer, "
+              "so the large download (about 1.3 GB) is skipped.")
+        gpu = False
+    elif gpu:
+        print("This downloads the CUDA libraries once, about 1.3 GB. "
+              "Use --cpu to skip them, or --gpu to download them even if installed.")
 
     if not python.is_file():
         print(f"Creating the Python environment in {venv} ...")

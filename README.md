@@ -108,7 +108,8 @@ The [quick start](#quick-start) covers most people. In more detail:
 
 `setup.py` creates a `.venv` folder next to the program and installs the
 transcription worker into it. It adds the NVIDIA CUDA libraries only when it
-finds an NVIDIA GPU. Pass `--gpu` or `--cpu` to choose yourself. Whispry
+finds an NVIDIA GPU, about 1.3 GB, and skips that download when the CUDA
+libraries are already installed on your computer. Pass `--gpu` or `--cpu` to choose yourself. Whispry
 finds that folder on its own; to use another Python, set `WHISPRY_PYTHON` to
 its path.
 

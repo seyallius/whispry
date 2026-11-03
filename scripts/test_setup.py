@@ -70,3 +70,14 @@ def test_a_missing_nvidia_smi_means_no_gpu(monkeypatch):
 
     monkeypatch.setattr(setup.subprocess, "run", missing)
     assert setup.detect_gpu() is False
+
+
+def test_cuda_libraries_already_on_the_system_are_found(tmp_path):
+    for name in setup.required_cuda_libraries("win32"):
+        (tmp_path / name).write_text("")
+    assert setup.system_has_cuda_libraries("win32", {"PATH": str(tmp_path)})
+
+
+def test_a_partly_installed_cuda_is_not_enough(tmp_path):
+    (tmp_path / "cublas64_12.dll").write_text("")
+    assert not setup.system_has_cuda_libraries("win32", {"PATH": str(tmp_path)})
