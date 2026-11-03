@@ -13,6 +13,7 @@ workspace = true
 clap = { version = "4.6.7", features = ["derive"] }
 ctrlc = "3.5.2"
 indicatif = "0.18.6"
+ratatui = "0.30.2"
 whispry-core = { path = "../whispry-core" }
 
 [dev-dependencies]

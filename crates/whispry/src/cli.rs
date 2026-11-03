@@ -27,6 +27,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Open the terminal UI (this is what runs without arguments)
+    Tui {
+        /// Fill in this file
+        audio: Option<PathBuf>,
+    },
     /// Transcribe a file without the terminal UI
     Transcribe(TranscribeArgs),
     /// Show the OS and which devices can run Whisper
@@ -178,12 +183,17 @@ fn transcribe(args: TranscribeArgs) -> ExitCode {
         usage_error(problem);
     }
 
+    run_config(&config)
+}
+
+/// Run one job in the terminal, printing its progress.
+fn run_config(config: &JobConfig) -> ExitCode {
     let cancel = cancel_on_ctrl_c();
     let mut renderer = ConsoleRenderer::new();
     let environment = JobEnvironment::detect();
 
     match run_job(
-        &config,
+        config,
         &environment,
         &mut |event| renderer.handle(&event),
         &cancel,
@@ -204,16 +214,29 @@ fn transcribe(args: TranscribeArgs) -> ExitCode {
     }
 }
 
+fn open_tui(audio: Option<PathBuf>) -> ExitCode {
+    use std::io::IsTerminal;
+
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        eprintln!(
+            "The terminal UI needs an interactive terminal. Use `whispry transcribe` instead."
+        );
+        return ExitCode::FAILURE;
+    }
+    match crate::tui::run(audio) {
+        Ok(Some(config)) => run_config(&config),
+        Ok(None) => ExitCode::SUCCESS,
+        Err(error) => fail(error),
+    }
+}
+
 pub fn run(cli: Cli) -> ExitCode {
     match cli.command {
+        None => open_tui(None),
+        Some(Command::Tui { audio }) => open_tui(audio),
         Some(Command::Transcribe(args)) => transcribe(args),
         Some(Command::Devices) => show_devices(),
         Some(Command::Ffmpeg) => check_ffmpeg(),
         Some(Command::Download { model }) => download(&model),
-        None => {
-            // The terminal UI becomes the default in a later change.
-            let _ = Cli::command().print_help();
-            ExitCode::SUCCESS
-        }
     }
 }
