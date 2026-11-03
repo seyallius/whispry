@@ -50,3 +50,34 @@ def test_probe_duration_with_and_without_ffprobe(sine_wav: Path):
 
     no_probe = tools.FFmpeg(system.ffmpeg, None, "bundled")
     assert tools.probe_duration(no_probe, sine_wav) == pytest.approx(3.0, abs=0.05)
+
+
+@needs_ffmpeg
+def test_stream_audio_yields_bounded_blocks(sine_wav: Path):
+    from whispry.core.audio import stream_audio
+    from whispry.core.config import SAMPLE_RATE
+
+    blocks = list(stream_audio(sine_wav, tools.find_ffmpeg(), block_seconds=1.0))
+    assert all(len(b) <= SAMPLE_RATE for b in blocks)
+    assert sum(len(b) for b in blocks) == pytest.approx(3 * SAMPLE_RATE, abs=SAMPLE_RATE // 100)
+
+
+@needs_ffmpeg
+def test_stream_audio_reports_decode_errors(tmp_path: Path):
+    from whispry.core.audio import AudioDecodeError, stream_audio
+
+    broken = tmp_path / "broken.mp3"
+    broken.write_bytes(b"not audio")
+    with pytest.raises(AudioDecodeError, match="broken.mp3"):
+        list(stream_audio(broken, tools.find_ffmpeg()))
+
+
+@needs_ffmpeg
+def test_closing_stream_early_stops_ffmpeg(tmp_path: Path):
+    from conftest import make_audio
+    from whispry.core.audio import stream_audio
+
+    long_audio = make_audio(tmp_path / "long.wav", "sine=duration=120")
+    stream = stream_audio(long_audio, tools.find_ffmpeg(), block_seconds=1.0)
+    next(stream)
+    stream.close()  # must not hang or leave FFmpeg running
