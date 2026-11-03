@@ -33,3 +33,5 @@ models/
 
 # Rust
 target/
+build/
+*.egg-info/
