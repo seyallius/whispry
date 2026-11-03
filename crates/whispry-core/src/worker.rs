@@ -643,7 +643,7 @@ mod tests {
 
     use crate::config::JobConfig;
     use crate::platform::{DeviceOption, cuda_option, detect_cpu};
-    use crate::test_support::FakeWorker;
+    use crate::test_support::{FakeWorker, require};
 
     const RATE: usize = 16_000;
 
@@ -866,7 +866,7 @@ mod tests {
 
     #[test]
     fn a_worker_that_dies_at_start_reports_what_it_printed() {
-        let Some(python) = crate::test_support::python() else {
+        let Some(python) = require("Python with numpy", crate::test_support::python()) else {
             return;
         };
         let dir = tempfile::tempdir().unwrap();
@@ -892,7 +892,7 @@ mod tests {
 
     #[test]
     fn output_that_is_not_the_protocol_is_reported() {
-        let Some(python) = crate::test_support::python() else {
+        let Some(python) = require("Python with numpy", crate::test_support::python()) else {
             return;
         };
         let dir = tempfile::tempdir().unwrap();

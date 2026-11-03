@@ -150,7 +150,7 @@ pub fn probe_duration(tool: &FFmpeg, audio: &Path) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::write_sine_wav;
+    use crate::test_support::{require, write_sine_wav};
 
     #[test]
     fn finds_tools_in_path_folders() {
@@ -209,8 +209,7 @@ mod tests {
 
     #[test]
     fn probes_duration_with_and_without_ffprobe() {
-        let Some(system) = find_ffmpeg() else {
-            eprintln!("skipped: needs ffmpeg");
+        let Some(system) = require("ffmpeg", find_ffmpeg()) else {
             return;
         };
         let dir = tempfile::tempdir().unwrap();

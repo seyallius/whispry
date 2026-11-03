@@ -30,6 +30,19 @@ use std::path::PathBuf;
 
 use crate::worker::WorkerCommand;
 
+/// Needs from the machine (FFmpeg, Python) that tests skip when missing.
+///
+/// With `WHISPRY_TEST_STRICT=1`, as set in CI, a missing need fails the test
+/// instead, so a green run always means the tests really ran.
+pub fn require<T>(what: &str, found: Option<T>) -> Option<T> {
+    if found.is_none() {
+        let strict = std::env::var("WHISPRY_TEST_STRICT").is_ok_and(|value| value == "1");
+        assert!(!strict, "this test needs {what}, which was not found");
+        eprintln!("skipped: needs {what}");
+    }
+    found
+}
+
 /// A Python that can run the worker (has numpy), if this machine has one.
 pub fn python() -> Option<PathBuf> {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -106,10 +119,7 @@ pub struct FakeWorker {
 impl FakeWorker {
     /// `None` when no suitable Python is installed (the test is skipped).
     pub fn new(dir: &Path, language: &str) -> Option<FakeWorker> {
-        let python = python().or_else(|| {
-            eprintln!("skipped: needs Python with numpy");
-            None
-        })?;
+        let python = require("Python with numpy", python())?;
         let script = dir.join("fake_worker.py");
         std::fs::write(&script, FAKE_WORKER).unwrap();
         let calls = dir.join("calls.jsonl");

@@ -181,7 +181,7 @@ impl Drop for AudioStream {
 mod tests {
     use super::*;
     use crate::ffmpeg::find_ffmpeg;
-    use crate::test_support::write_sine_wav;
+    use crate::test_support::{require, write_sine_wav};
 
     fn rate() -> usize {
         SAMPLE_RATE as usize
@@ -189,7 +189,9 @@ mod tests {
 
     #[test]
     fn yields_bounded_blocks_covering_the_audio() {
-        let Some(tool) = find_ffmpeg() else { return };
+        let Some(tool) = require("ffmpeg", find_ffmpeg()) else {
+            return;
+        };
         let dir = tempfile::tempdir().unwrap();
         let wav = dir.path().join("sine.wav");
         write_sine_wav(&wav, 3, 440.0);
@@ -206,7 +208,9 @@ mod tests {
 
     #[test]
     fn reports_decode_errors_with_the_file_name() {
-        let Some(tool) = find_ffmpeg() else { return };
+        let Some(tool) = require("ffmpeg", find_ffmpeg()) else {
+            return;
+        };
         let dir = tempfile::tempdir().unwrap();
         let broken = dir.path().join("broken.mp3");
         std::fs::write(&broken, b"not audio").unwrap();
@@ -218,7 +222,9 @@ mod tests {
 
     #[test]
     fn dropping_the_stream_early_stops_ffmpeg() {
-        let Some(tool) = find_ffmpeg() else { return };
+        let Some(tool) = require("ffmpeg", find_ffmpeg()) else {
+            return;
+        };
         let dir = tempfile::tempdir().unwrap();
         let wav = dir.path().join("long.wav");
         write_sine_wav(&wav, 120, 440.0);

@@ -381,7 +381,7 @@ mod tests {
     use crate::models::REQUIRED_FILES;
     use crate::platform::detect_cpu;
     use crate::platform::{Os, cuda_option};
-    use crate::test_support::{FakeWorker, write_sine_wav};
+    use crate::test_support::{FakeWorker, require, write_sine_wav};
 
     /// Everything a job test needs, or `None` when FFmpeg or Python is missing.
     struct Setup {
@@ -392,10 +392,7 @@ mod tests {
     }
 
     fn setup(seconds: u32, language: &str) -> Option<Setup> {
-        find_ffmpeg().or_else(|| {
-            eprintln!("skipped: needs ffmpeg");
-            None
-        })?;
+        require("ffmpeg", find_ffmpeg())?;
         let dir = tempfile::tempdir().unwrap();
         let fake = FakeWorker::new(dir.path(), language)?;
 
