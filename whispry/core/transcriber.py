@@ -10,6 +10,7 @@ from whispry.core.events import (
     EventSink,
     Finished,
     LanguageDetected,
+    Log,
     Progress,
     SegmentReady,
     Stage,
@@ -18,28 +19,78 @@ from whispry.core.events import (
     ignore_event,
 )
 from whispry.core.models import ensure_model
+from whispry.core.platform import (
+    AUTO,
+    CPU,
+    SystemInfo,
+    detect_system,
+    resolve_device,
+)
 from whispry.core.timestamps import format_timestamp
 
-COMPUTE_TYPE = "int8_float16"
+
+class ModelLoadError(RuntimeError):
+    """The model could not be loaded on the requested device."""
+
+    def __init__(self, device: str, error: Exception):
+        super().__init__(f"Could not load the model on {device}: {error}")
+        self.device = device
 
 
-def run_job(config: JobConfig, on_event: EventSink = ignore_event) -> Finished:
-    """Transcribe `config.audio` and write timestamped text to the output file."""
+def _load_model(model_dir, device: str, compute_type: str, system: SystemInfo):
     from faster_whisper import WhisperModel
 
+    try:
+        return WhisperModel(
+            str(model_dir),
+            device=device,
+            compute_type=compute_type,
+            cpu_threads=system.cpu_threads if device == CPU else 0,
+            local_files_only=True,
+        )
+    except Exception as error:
+        raise ModelLoadError(device, error) from error
+
+
+def load_model(
+    model_dir,
+    config: JobConfig,
+    system: SystemInfo,
+    on_event: EventSink = ignore_event,
+):
+    """Load the model, falling back from GPU to CPU when the device is `auto`."""
+    option, compute_type = resolve_device(config.device, system, config.compute_type)
+
+    on_event(StageStarted(Stage.MODEL, f"Loading model on {option.label} ({compute_type})..."))
+    start = time.perf_counter()
+
+    try:
+        model = _load_model(model_dir, option.name, compute_type, system)
+    except ModelLoadError as error:
+        if config.device != AUTO or option.name == CPU:
+            raise
+        on_event(Log(f"{error}. Falling back to CPU."))
+        option, compute_type = resolve_device(CPU, system)
+        model = _load_model(model_dir, option.name, compute_type, system)
+
+    on_event(StageFinished(Stage.MODEL, time.perf_counter() - start))
+    return model
+
+
+def run_job(
+    config: JobConfig,
+    on_event: EventSink = ignore_event,
+    system: SystemInfo | None = None,
+) -> Finished:
+    """Transcribe `config.audio` and write timestamped text to the output file."""
     job_start = time.perf_counter()
+    system = system or detect_system()
+
+    # Fail fast on an impossible device before downloading anything.
+    resolve_device(config.device, system, config.compute_type)
 
     model_dir = ensure_model(config.model, on_event)
-
-    on_event(StageStarted(Stage.MODEL, "Loading model onto NVIDIA GPU..."))
-    start = time.perf_counter()
-    model = WhisperModel(
-        str(model_dir),
-        device="cuda",
-        compute_type=COMPUTE_TYPE,
-        local_files_only=True,
-    )
-    on_event(StageFinished(Stage.MODEL, time.perf_counter() - start))
+    model = load_model(model_dir, config, system, on_event)
 
     on_event(StageStarted(Stage.DECODE, "Decoding audio with FFmpeg..."))
     start = time.perf_counter()

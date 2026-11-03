@@ -7,9 +7,9 @@ default:
 setup:
     ./scripts/setup.sh
 
-# Verify that CTranslate2 can access the NVIDIA GPU.
+# Show the detected OS and which devices (CPU/GPU) can run Whisper.
 check:
-    ./scripts/run.sh -c "import ctranslate2; print('CUDA devices:', ctranslate2.get_cuda_device_count()); print('Compute types:', ctranslate2.get_supported_compute_types('cuda'))"
+    ./scripts/run.sh -c "from whispry.core.platform import detect_system; s = detect_system(); print(s.os_label); [print('-', d.label, 'available' if d.available else 'unavailable:', d.reason or ', '.join(d.compute_types)) for d in s.devices]"
 
 # Transcribe with automatic language detection.
 transcribe file model="small":

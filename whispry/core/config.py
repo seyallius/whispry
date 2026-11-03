@@ -26,6 +26,8 @@ class JobConfig:
     model: str = DEFAULT_MODEL
     language: str | None = None
     output: Path | None = None
+    device: str = "auto"
+    compute_type: str | None = None
 
     @property
     def output_path(self) -> Path:
@@ -44,5 +46,8 @@ def validate_config(config: JobConfig) -> list[str]:
 
     if config.language is not None and config.language not in LANGUAGES:
         problems.append(f"Unsupported language: {config.language}")
+
+    if config.device not in ("auto", "cpu", "cuda"):
+        problems.append(f"Unknown device: {config.device}")
 
     return problems

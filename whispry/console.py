@@ -19,7 +19,9 @@ from whispry.core.events import (
     StageFinished,
     StageStarted,
 )
+from whispry.core.platform import DeviceUnavailable
 from whispry.core.timestamps import format_timestamp
+from whispry.core.transcriber import ModelLoadError
 
 
 class ConsoleRenderer:
@@ -69,9 +71,19 @@ def main():
                         help="Language code; omit to auto-detect")
     parser.add_argument("--model", choices=MODEL_REPOSITORIES, default=DEFAULT_MODEL,
                         help="Whisper model size")
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto",
+                        help="Compute device; auto uses the GPU when available")
+    parser.add_argument("--compute-type", default=None,
+                        help="CTranslate2 compute type; defaults to the device's best")
     args = parser.parse_args()
 
-    config = JobConfig(audio=args.audio, model=args.model, language=args.language)
+    config = JobConfig(
+        audio=args.audio,
+        model=args.model,
+        language=args.language,
+        device=args.device,
+        compute_type=args.compute_type,
+    )
     for problem in validate_config(config):
         parser.error(problem)
 
@@ -80,6 +92,9 @@ def main():
     except KeyboardInterrupt:
         print("\nInterrupted by user.", file=sys.stderr)
         sys.exit(130)
+    except (DeviceUnavailable, ModelLoadError) as error:
+        print(f"\nError: {error}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
