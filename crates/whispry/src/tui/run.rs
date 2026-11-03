@@ -130,6 +130,15 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// Cut `text` to `width` characters, ending in "…" if it was shortened.
+pub fn truncate(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
+    format!("{kept}…")
+}
+
 fn format_bytes(bytes: f64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
     let mut value = bytes;
@@ -529,30 +538,34 @@ impl RunState {
         );
     }
 
+    /// The transcript wraps long lines and follows the newest; the activity
+    /// log keeps one line per entry, cut short with "…" if it does not fit.
     fn render_log(
         &self,
         frame: &mut Frame,
         area: Rect,
         title: &str,
         lines: &[String],
-        follow_wrapped: bool,
+        is_transcript: bool,
     ) {
         let block = Block::bordered()
             .border_style(Style::new().fg(DIM))
             .title(title.to_string());
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let wrapped: Vec<String> = lines
-            .iter()
-            .flat_map(|line| wrap(line, inner.width as usize))
-            .collect();
-        let skip = wrapped.len().saturating_sub(inner.height as usize);
-        let style = if follow_wrapped {
+        let width = inner.width as usize;
+        let shown_lines: Vec<String> = if is_transcript {
+            lines.iter().flat_map(|line| wrap(line, width)).collect()
+        } else {
+            lines.iter().map(|line| truncate(line, width)).collect()
+        };
+        let skip = shown_lines.len().saturating_sub(inner.height as usize);
+        let style = if is_transcript {
             Style::new()
         } else {
             Style::new().fg(DIM)
         };
-        let shown: Vec<Line> = wrapped[skip..]
+        let shown: Vec<Line> = shown_lines[skip..]
             .iter()
             .map(|l| Line::from(Span::styled(l.clone(), style)))
             .collect();

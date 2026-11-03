@@ -725,3 +725,20 @@ fn a_retry_on_the_cpu_also_checks_for_ffmpeg() {
     assert_eq!(jobs_started(), 1);
     assert!(screen(&app, 100, 30).contains("FFmpeg is needed"));
 }
+
+#[test]
+fn long_activity_lines_are_cut_short_not_wrapped() {
+    use super::run::truncate;
+    assert_eq!(truncate("short", 10), "short");
+    assert_eq!(truncate("a very long line", 8), "a very …");
+
+    let (mut app, _dir) = running_app();
+    send_event(Event::Log(format!(
+        "Using cached model: {}",
+        "x".repeat(200)
+    )));
+    deliver(&mut app);
+    let text = screen(&app, 100, 34);
+    assert!(text.contains("Using cached model: xxx"), "{text}");
+    assert!(text.contains('…'), "{text}");
+}
