@@ -424,6 +424,14 @@ mod tests {
                     let body = routes.lock().unwrap().get(path).cloned();
                     let mut stream = &stream;
                     match body {
+                        // A body that starts with this marker is a redirect.
+                        Some(body) if body.starts_with(b"REDIRECT ") => {
+                            let target = String::from_utf8_lossy(&body[9..]).into_owned();
+                            let head = format!(
+                                "HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            );
+                            let _ = stream.write_all(head.as_bytes());
+                        }
                         Some(body) => {
                             let head = format!(
                                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -584,6 +592,36 @@ mod tests {
             "{leftovers:?}"
         );
         assert!(!is_model_cached("small", cache.path()));
+    }
+
+    #[test]
+    fn follows_the_redirect_hugging_face_sends_to_its_cdn() {
+        let mut routes = repository_routes(&[]);
+        // The real site answers a file request with a 302 to another server.
+        let big = routes
+            .remove("/Systran/faster-whisper-small/resolve/main/model.bin")
+            .unwrap();
+        routes.insert("/cdn/abc123".into(), big);
+        routes.insert(
+            "/Systran/faster-whisper-small/resolve/main/model.bin".into(),
+            b"REDIRECT /cdn/abc123".to_vec(),
+        );
+        let server = serve(routes);
+        let cache = tempfile::tempdir().unwrap();
+
+        let path = ensure_model_from(
+            &server.endpoint,
+            &plain_agent(),
+            "small",
+            &mut |_| {},
+            &CancelToken::new(),
+            Some(cache.path()),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::metadata(path.join("model.bin")).unwrap().len(),
+            3 << 20
+        );
     }
 
     #[test]
