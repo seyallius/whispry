@@ -6,6 +6,7 @@ from pathlib import Path
 
 from textual.app import App
 
+from whispry.tui.screens.run import RunScreen
 from whispry.tui.screens.setup import SetupScreen
 from whispry.tui.services import Services
 
@@ -25,5 +26,4 @@ class WhispryApp(App):
         self.push_screen(SetupScreen(self.initial_file))
 
     def start_job(self, config) -> None:
-        """Hand the chosen job back to the caller, which runs it."""
-        self.exit(config)
+        self.push_screen(RunScreen(config))

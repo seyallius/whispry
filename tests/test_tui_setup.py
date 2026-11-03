@@ -4,6 +4,7 @@ from dataclasses import replace
 from textual.widgets import Input, RadioButton, Select, Static
 
 from fakes import CPU_SYSTEM
+from whispry.core.events import Finished
 from whispry.core.platform import CUDA, DeviceOption, SystemInfo
 from whispry.tui.app import WhispryApp
 from whispry.tui.services import Services
@@ -70,8 +71,13 @@ def test_marks_downloaded_models():
     run(WhispryApp(services()), check)
 
 
-def test_start_validates_then_returns_config(tmp_path):
+def test_start_validates_then_runs_job(tmp_path):
     audio = tmp_path / "talk.mp3"
+    started = []
+
+    def fake_run_job(config, on_event, system, cancel):
+        started.append(config)
+        return Finished(config.output_path, 0.0, 0.0)
 
     async def interact(app, pilot):
         app.screen.query_one("#file", Input).value = str(audio)
@@ -82,7 +88,10 @@ def test_start_validates_then_returns_config(tmp_path):
         audio.write_bytes(b"")
         app.screen.query_one("#language", Select).value = "fa"
         await pilot.press("ctrl+s")
+        await app.workers.wait_for_complete()
         await pilot.pause()
+        assert type(app.screen).__name__ == "RunScreen"
 
-    config = run(WhispryApp(services()), interact)
+    run(WhispryApp(services(run_job=fake_run_job)), interact)
+    [config] = started
     assert (config.audio, config.language, config.device, config.compute_type) == (audio, "fa", "auto", None)
