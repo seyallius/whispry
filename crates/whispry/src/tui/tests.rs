@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
@@ -9,6 +9,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use whispry_core::cancel::{CancelToken, JobCancelled};
 use whispry_core::config::{DeviceChoice, JobConfig, validate_config};
 use whispry_core::events::{Event, Stage};
+use whispry_core::ffmpeg::FFmpeg;
 use whispry_core::platform::{Os, SystemInfo, cuda_option, detect_cpu};
 use whispry_core::transcriber::{JobError, JobSummary};
 use whispry_core::worker::WorkerError;
@@ -51,6 +52,18 @@ impl Services for FakeServices {
     fn validate(&self, config: &JobConfig) -> Vec<String> {
         validate_config(config)
     }
+    fn find_ffmpeg(&self) -> Option<FFmpeg> {
+        FFMPEG_INSTALLED.get().then(|| FFmpeg {
+            ffmpeg: "ffmpeg".into(),
+            ffprobe: None,
+        })
+    }
+    fn ffmpeg_install_steps(&self) -> Vec<String> {
+        vec![
+            "Run:  sudo apt install ffmpeg".into(),
+            "Check with:  ffmpeg -version".into(),
+        ]
+    }
     fn start_job(&self, config: JobConfig, cancel: CancelToken, sender: Sender<JobMessage>) {
         STARTED.with(|started| {
             started.borrow_mut().push(Started {
@@ -71,6 +84,7 @@ struct Started {
 }
 
 thread_local! {
+    static FFMPEG_INSTALLED: Cell<bool> = const { Cell::new(true) };
     // Each test runs on its own thread, so each sees only its own jobs.
     static STARTED: RefCell<Vec<Started>> = const { RefCell::new(Vec::new()) };
 }
@@ -639,4 +653,75 @@ fn long_lines_wrap_at_the_width() {
     assert_eq!(wrap("one two three", 7), ["one two", "three"]);
     assert_eq!(wrap("abcdefghij", 4), ["abcd", "efgh", "ij"]);
     assert_eq!(wrap("", 5), [""]);
+}
+
+// ----- the FFmpeg dialog -----
+
+#[test]
+fn a_missing_ffmpeg_shows_the_install_steps_instead_of_starting() {
+    FFMPEG_INSTALLED.set(false);
+    let (mut app, _dir, _) = app_with_file(FakeServices::new(0));
+    ctrl(&mut app, 's');
+    assert_eq!(jobs_started(), 0);
+    let text = screen(&app, 100, 30);
+    for expected in [
+        "FFmpeg is needed",
+        "sudo apt install ffmpeg",
+        "Check again",
+        "Close",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+    }
+}
+
+#[test]
+fn checking_again_starts_the_job_once_ffmpeg_is_installed() {
+    FFMPEG_INSTALLED.set(false);
+    let (mut app, _dir, audio) = app_with_file(FakeServices::new(0));
+    ctrl(&mut app, 's');
+
+    press(&mut app, KeyCode::Enter); // Check again; still missing
+    assert_eq!(jobs_started(), 0);
+    assert!(screen(&app, 100, 30).contains("still not found"));
+
+    FFMPEG_INSTALLED.set(true);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(jobs_started(), 1);
+    assert_eq!(last_started().audio, audio);
+    assert!(screen(&app, 100, 30).contains("Transcribing"));
+}
+
+#[test]
+fn closing_the_dialog_returns_to_the_setup_screen() {
+    FFMPEG_INSTALLED.set(false);
+    let (mut app, _dir, _) = app_with_file(FakeServices::new(0));
+    ctrl(&mut app, 's');
+    press(&mut app, KeyCode::Esc);
+    let text = screen(&app, 100, 30);
+    assert!(!text.contains("FFmpeg is needed"));
+    assert!(text.contains("Start transcription"));
+    assert_eq!(jobs_started(), 0);
+}
+
+#[test]
+fn the_close_button_works_with_tab_and_enter() {
+    FFMPEG_INSTALLED.set(false);
+    let (mut app, _dir, _) = app_with_file(FakeServices::new(0));
+    ctrl(&mut app, 's');
+    press(&mut app, KeyCode::Tab);
+    press(&mut app, KeyCode::Enter);
+    assert!(!screen(&app, 100, 30).contains("FFmpeg is needed"));
+}
+
+#[test]
+fn a_retry_on_the_cpu_also_checks_for_ffmpeg() {
+    let (mut app, _dir) = running_app();
+    send(JobMessage::Done(Err(JobError::Worker(
+        WorkerError::Exited("x".into()),
+    ))));
+    deliver(&mut app);
+    FFMPEG_INSTALLED.set(false);
+    press(&mut app, KeyCode::Enter); // Retry on CPU
+    assert_eq!(jobs_started(), 1);
+    assert!(screen(&app, 100, 30).contains("FFmpeg is needed"));
 }

@@ -2,6 +2,7 @@
 //! job reports; the work itself happens in `whispry-core`.
 
 mod app;
+mod ffmpeg_dialog;
 mod file_picker;
 mod input;
 mod run;

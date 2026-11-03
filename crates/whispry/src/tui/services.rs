@@ -9,8 +9,9 @@ use std::sync::mpsc::Sender;
 use whispry_core::cancel::CancelToken;
 use whispry_core::config::{JobConfig, validate_config};
 use whispry_core::events::Event;
+use whispry_core::ffmpeg::{FFmpeg, find_ffmpeg, install_instructions};
 use whispry_core::models::find_cached_model;
-use whispry_core::platform::SystemInfo;
+use whispry_core::platform::{Os, SystemInfo};
 use whispry_core::transcriber::{JobEnvironment, JobError, JobSummary, run_job};
 
 /// What a running job sends back to the UI.
@@ -26,6 +27,8 @@ pub trait Services {
     fn worker_available(&self) -> bool;
     fn is_model_downloaded(&self, model: &str) -> bool;
     fn validate(&self, config: &JobConfig) -> Vec<String>;
+    fn find_ffmpeg(&self) -> Option<FFmpeg>;
+    fn ffmpeg_install_steps(&self) -> Vec<String>;
     /// Run a job in the background, sending its events and result to `sender`.
     fn start_job(&self, config: JobConfig, cancel: CancelToken, sender: Sender<JobMessage>);
 }
@@ -58,6 +61,14 @@ impl Services for RealServices {
 
     fn validate(&self, config: &JobConfig) -> Vec<String> {
         validate_config(config)
+    }
+
+    fn find_ffmpeg(&self) -> Option<FFmpeg> {
+        find_ffmpeg()
+    }
+
+    fn ffmpeg_install_steps(&self) -> Vec<String> {
+        install_instructions(Os::current())
     }
 
     fn start_job(&self, config: JobConfig, cancel: CancelToken, sender: Sender<JobMessage>) {
