@@ -1,24 +1,77 @@
-# Whispry
+<h1 align="center">Whispry</h1>
 
-Private, local speech-to-text transcription on CPU or NVIDIA GPU,
-on Linux, Windows, and macOS.
+<p align="center">
+  <b>Turn recordings into text, right on your own computer.</b><br>
+  No uploads, no accounts, no subscriptions. Just your audio and your machine.
+</p>
 
-Whispry uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
-and CTranslate2 to transcribe audio and video files on your own computer.
+<p align="center">
+  <img src="docs/screenshots/transcribing.png" alt="Whispry transcribing a meeting recording, with a live transcript and progress" width="820">
+</p>
+
+Whispry is a friendly terminal app for speech-to-text. Point it at a
+meeting, lecture, interview, or voice memo, and watch the transcript
+appear line by line. It runs on Linux, Windows, and macOS, uses your
+NVIDIA GPU when you have one, and works fine on a plain laptop CPU when
+you don't.
+
+Under the hood it uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+and CTranslate2, OpenAI's Whisper models made fast.
+
+## Quick start
+
+```bash
+git clone https://github.com/seyallius/whispry.git
+cd whispry
+python3 scripts/setup.py   # Windows: py scripts\setup.py
+.venv/bin/whispry          # Windows: .venv\Scripts\whispry
+```
+
+That's it. Setup figures out whether you have a GPU and whether FFmpeg
+is installed, and asks you only when it needs a decision.
+
+## A quick tour
+
+**Pick what to transcribe.** Choose a file (type a path or browse),
+a model, the language, and where to run it. Whispry checks your machine
+first: if there's no usable GPU, that option is greyed out and tells you
+why.
+
+<p align="center">
+  <img src="docs/screenshots/setup.png" alt="Setup screen with file, model, language and device options" width="720">
+</p>
+
+**Watch it work.** The transcript fills in as Whispry listens, with
+progress, speed, and an estimate of the time left. Changed your mind?
+Press `Esc`; anything already transcribed is kept.
+
+**Get your text.** A timestamped `.txt` file lands right next to your
+recording.
+
+<p align="center">
+  <img src="docs/screenshots/done.png" alt="Finished transcription with the saved file path" width="720">
+</p>
+
+**Missing FFmpeg? No problem.** Whispry tells you how to install it for
+your system, or sets up a bundled copy for you. Your call.
+
+<p align="center">
+  <img src="docs/screenshots/ffmpeg.png" alt="Dialog offering install steps or a bundled FFmpeg" width="720">
+</p>
+
+_Screenshots show demo content._
 
 ## Features
 
-- Terminal UI: pick a file, model, language, and device, then watch the
-  transcript appear live with progress, speed, and a Cancel button
-- Scriptable CLI built on the same engine
-- Runs on the CPU anywhere; uses an NVIDIA GPU automatically when one is
-  available (and falls back to the CPU if the GPU fails)
-- Detects the OS, GPU, and FFmpeg for you, and explains what's missing
-- Constant memory use: long files are processed a few minutes at a time,
-  so a multi-hour recording needs no more RAM than a short one
-- Persian and English, or automatic language detection
-- Small and Medium Whisper models, cached for offline use
-- Timestamped UTF-8 text output
+- **Private by design:** your audio never leaves your computer
+- **CPU or GPU:** runs anywhere and uses an NVIDIA GPU automatically when
+  available, falling back to the CPU if the GPU has trouble
+- **Handles long recordings:** audio is processed a few minutes at a time,
+  so a three-hour recording uses no more memory than a three-minute one
+- **Persian and English**, or let Whispry detect the language
+- **Small and Medium models**, downloaded once and then used offline
+- **Terminal UI for people, CLI for scripts**, both powered by the same engine
+- **Timestamped UTF-8 text** you can search, edit, or share
 
 ## Requirements
 
@@ -29,13 +82,7 @@ and CTranslate2 to transcribe audio and video files on your own computer.
 
 ## Installation
 
-```bash
-git clone https://github.com/seyallius/whispry.git
-cd whispry
-python3 scripts/setup.py
-```
-
-On Windows, use `py scripts\setup.py`.
+The [quick start](#quick-start) covers most people. In more detail:
 
 Setup creates a `.venv` folder and installs Whispry into it. It installs
 the CUDA libraries only when it detects an NVIDIA GPU. Pass `--gpu` or
