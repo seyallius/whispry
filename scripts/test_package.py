@@ -1,5 +1,5 @@
 import importlib.util
-import os
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -42,7 +42,8 @@ def test_linux_archive_holds_the_program_worker_and_setup_script(repo, tmp_path)
                 "LICENSE", "setup.py", "whispry", "worker", "worker/pyproject.toml",
                 "worker/whispry_worker", "worker/whispry_worker/server.py"]]
         )
-        assert tar.getmember("whispry-1.2.3-linux-x86_64/whispry").mode & 0o111
+        if sys.platform != "win32":  # Windows files have no executable bit
+            assert tar.getmember("whispry-1.2.3-linux-x86_64/whispry").mode & 0o111
 
 
 def test_windows_archive_is_a_zip(repo, tmp_path):
