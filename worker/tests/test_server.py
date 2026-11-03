@@ -146,3 +146,24 @@ def test_short_audio_is_protocol_error():
     data = encode(transcribe_msg(1), audio(10))[:-5]
     out = run_serve(data, lambda *a: FakeModel())
     assert out[-1]["stage"] == "protocol"
+
+
+def test_cuda_libraries_are_loaded_before_ctranslate2_is_asked_about_the_gpu(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from whispry_worker import server
+
+    order = []
+    monkeypatch.setattr(server, "prepare_cuda_libraries", lambda os_name: order.append("libraries"))
+
+    def get_supported_compute_types(device):
+        order.append("query")
+        return {"int8"}
+
+    monkeypatch.setitem(
+        sys.modules, "ctranslate2", SimpleNamespace(get_supported_compute_types=get_supported_compute_types)
+    )
+    assert server.supported_compute_types("cuda") == {"int8"}
+    assert order == ["libraries", "query"]
+

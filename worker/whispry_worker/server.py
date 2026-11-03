@@ -29,6 +29,9 @@ def load_whisper_model(model_dir, device, compute_type, cpu_threads):
 
 def supported_compute_types(device):
     """Compute types this machine can run on `device`."""
+    # The pip-installed CUDA libraries must be loaded before CTranslate2 is
+    # asked anything about the GPU.
+    prepare_cuda_libraries(platform.system())
     import ctranslate2
 
     return set(ctranslate2.get_supported_compute_types(device))
