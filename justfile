@@ -29,7 +29,7 @@ download model="small":
 
 # Check Python syntax without executing the transcriber.
 lint:
-    ./scripts/run.sh -c "import ast, pathlib; ast.parse(pathlib.Path('transcribe.py').read_text())"
+    ./scripts/run.sh -c "import ast, pathlib; [ast.parse(p.read_text()) for p in [pathlib.Path('transcribe.py'), *pathlib.Path('whispry').rglob('*.py')]]"
 
 # Remove Python cache files.
 clean:
