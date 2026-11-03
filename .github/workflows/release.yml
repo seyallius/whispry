@@ -29,11 +29,15 @@ jobs:
       fail-fast: true
       matrix:
         include:
+          # Linux is built against musl, so the program has no dependencies and
+          # runs on any distribution, old or new.
           - os: ubuntu-latest
             target: linux-x86_64
+            rust_target: x86_64-unknown-linux-musl
             binary: whispry
           - os: windows-latest
             target: windows-x86_64
+            rust_target: x86_64-pc-windows-msvc
             binary: whispry.exe
     steps:
       - uses: actions/checkout@v4
@@ -54,15 +58,22 @@ jobs:
           fi
           echo "VERSION=$crate_version" >> "$GITHUB_ENV"
 
+      - name: Install the musl tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Add the build target
+        run: rustup target add ${{ matrix.rust_target }}
+
       - name: Build
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target ${{ matrix.rust_target }}
 
       - name: Package
-        run: python scripts/package.py --binary target/release/${{ matrix.binary }} --version "$env:VERSION" --target ${{ matrix.target }} --out dist
+        run: python scripts/package.py --binary target/${{ matrix.rust_target }}/release/${{ matrix.binary }} --version "$env:VERSION" --target ${{ matrix.target }} --out dist
         if: runner.os == 'Windows'
 
       - name: Package
-        run: python scripts/package.py --binary target/release/${{ matrix.binary }} --version "$VERSION" --target ${{ matrix.target }} --out dist
+        run: python scripts/package.py --binary target/${{ matrix.rust_target }}/release/${{ matrix.binary }} --version "$VERSION" --target ${{ matrix.target }} --out dist
         if: runner.os != 'Windows'
 
       - name: Check the archive starts
@@ -75,6 +86,9 @@ jobs:
             tar xzf dist/*.tar.gz -C unpacked
           fi
           cd unpacked/whispry-*
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            file ${{ matrix.binary }} | grep -qE "statically linked|static-pie linked" || { echo "The Linux program must be statically linked" >&2; exit 1; }
+          fi
           ./${{ matrix.binary }} --version
           test -f setup.py
           test -f worker/pyproject.toml
