@@ -5,6 +5,7 @@
 //! into a job and render the events the job emits.
 
 pub mod audio;
+pub mod chunking;
 pub mod config;
 pub mod events;
 pub mod ffmpeg;
