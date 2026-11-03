@@ -4,6 +4,10 @@
 //! This crate never prints. Front ends (the TUI and the CLI) turn user input
 //! into a job and render the events the job emits.
 
+pub mod config;
+pub mod events;
+pub mod timestamps;
+
 /// The version of Whispry, taken from the workspace manifest.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
