@@ -14,6 +14,7 @@ pub mod models;
 pub mod platform;
 mod process;
 pub mod timestamps;
+pub mod worker;
 
 #[cfg(test)]
 mod test_support;
