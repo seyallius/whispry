@@ -1,4 +1,4 @@
-"""Console front end: parses arguments and renders core events."""
+"""Command-line front end: parses arguments and renders core events as text."""
 
 import argparse
 import sys
@@ -6,9 +6,17 @@ from pathlib import Path
 
 from tqdm import tqdm
 
+from whispry import __version__
 from whispry.core import JobConfig, run_job
-from whispry.core.config import DEFAULT_CHUNK_MINUTES, DEFAULT_MODEL, LANGUAGES, MODEL_REPOSITORIES
-from whispry.core.config import validate_config
+from whispry.core import ffmpeg as ffmpeg_tools
+from whispry.core.audio import AudioDecodeError
+from whispry.core.config import (
+    DEFAULT_CHUNK_MINUTES,
+    DEFAULT_MODEL,
+    LANGUAGES,
+    MODEL_REPOSITORIES,
+    validate_config,
+)
 from whispry.core.events import (
     Finished,
     LanguageDetected,
@@ -19,9 +27,8 @@ from whispry.core.events import (
     StageFinished,
     StageStarted,
 )
-from whispry.core import ffmpeg as ffmpeg_tools
-from whispry.core.audio import AudioDecodeError
-from whispry.core.platform import DeviceUnavailable
+from whispry.core.models import ensure_model
+from whispry.core.platform import DeviceUnavailable, detect_system
 from whispry.core.timestamps import format_timestamp
 from whispry.core.transcriber import ModelLoadError
 
@@ -98,25 +105,59 @@ def ask_for_ffmpeg() -> bool:
     return False
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Transcribe audio locally.")
-    parser.add_argument("audio", type=Path, help="Audio or video file")
-    parser.add_argument("--language", choices=LANGUAGES, default=None,
-                        help="Language code; omit to auto-detect")
-    parser.add_argument("--model", choices=MODEL_REPOSITORIES, default=DEFAULT_MODEL,
-                        help="Whisper model size")
-    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto",
-                        help="Compute device; auto uses the GPU when available")
-    parser.add_argument("--chunk-minutes", type=float, default=DEFAULT_CHUNK_MINUTES,
-                        help="Process audio this many minutes at a time (bounds RAM use)")
-    parser.add_argument("--compute-type", default=None,
-                        help="CTranslate2 compute type; defaults to the device's best")
-    args = parser.parse_args()
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="whispry",
+        description="Private, local speech-to-text. Run without arguments to open the TUI.",
+    )
+    parser.add_argument("--version", action="version", version=f"whispry {__version__}")
+    commands = parser.add_subparsers(dest="command")
 
+    tui = commands.add_parser("tui", help="Open the terminal UI (default)")
+    tui.add_argument("audio", type=Path, nargs="?", help="Pre-fill this file")
+
+    run = commands.add_parser("transcribe", help="Transcribe a file without the TUI")
+    run.add_argument("audio", type=Path, help="Audio or video file")
+    run.add_argument("--language", choices=LANGUAGES, default=None,
+                     help="Language code; omit to auto-detect")
+    run.add_argument("--model", choices=MODEL_REPOSITORIES, default=DEFAULT_MODEL,
+                     help="Whisper model size")
+    run.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto",
+                     help="Compute device; auto uses the GPU when available")
+    run.add_argument("--compute-type", default=None,
+                     help="CTranslate2 compute type; defaults to the device's best")
+    run.add_argument("--chunk-minutes", type=float, default=DEFAULT_CHUNK_MINUTES,
+                     help="Process audio this many minutes at a time (bounds RAM use)")
+    run.add_argument("--output", "-o", type=Path, default=None,
+                     help="Output text file (default: beside the input, .txt)")
+
+    commands.add_parser("devices", help="Show the OS and which devices can run Whisper")
+
+    download = commands.add_parser("download", help="Download a model for offline use")
+    download.add_argument("model", choices=MODEL_REPOSITORIES)
+
+    return parser
+
+
+def show_devices() -> None:
+    system = detect_system()
+    print(system.os_label)
+    print(f"CPU threads: {system.cpu_threads}")
+    for option in system.devices:
+        if option.available:
+            print(f"  [available]   {option.label}: {', '.join(option.compute_types)}")
+        else:
+            print(f"  [unavailable] {option.label}: {option.reason}")
+    tool = ffmpeg_tools.find_ffmpeg()
+    print(f"FFmpeg: {tool.ffmpeg} ({tool.source})" if tool else "FFmpeg: not found")
+
+
+def transcribe(parser: argparse.ArgumentParser, args) -> None:
     config = JobConfig(
         audio=args.audio,
         model=args.model,
         language=args.language,
+        output=args.output,
         device=args.device,
         compute_type=args.compute_type,
         chunk_minutes=args.chunk_minutes,
@@ -127,8 +168,24 @@ def main():
     if ffmpeg_tools.find_ffmpeg() is None and not ask_for_ffmpeg():
         sys.exit(1)
 
+    run_job(config, ConsoleRenderer())
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
     try:
-        run_job(config, ConsoleRenderer())
+        if args.command in (None, "tui"):
+            from whispry.tui import main as tui_main
+
+            tui_main(getattr(args, "audio", None))
+        elif args.command == "transcribe":
+            transcribe(parser, args)
+        elif args.command == "devices":
+            show_devices()
+        elif args.command == "download":
+            print(ensure_model(args.model, ConsoleRenderer()))
     except KeyboardInterrupt:
         print("\nInterrupted by user.", file=sys.stderr)
         sys.exit(130)

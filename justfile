@@ -15,15 +15,15 @@ check:
 
 # Transcribe with automatic language detection.
 transcribe file model="small":
-    {{python}} -m whispry.console "{{file}}" --model "{{model}}"
+    {{python}} -m whispry transcribe "{{file}}" --model "{{model}}"
 
 # Transcribe Persian speech.
 persian file model="small":
-    {{python}} -m whispry.console "{{file}}" --language fa --model "{{model}}"
+    {{python}} -m whispry transcribe "{{file}}" --language fa --model "{{model}}"
 
 # Transcribe English speech.
 english file model="small":
-    {{python}} -m whispry.console "{{file}}" --language en --model "{{model}}"
+    {{python}} -m whispry transcribe "{{file}}" --language en --model "{{model}}"
 
 # Download and cache a Whisper model.
 download model="small":
