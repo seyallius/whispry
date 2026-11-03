@@ -13,6 +13,9 @@ Options:
     --gpu    install the GPU libraries even if no GPU was detected
     --cpu    skip the GPU libraries even if a GPU was detected
     --dev    for a source checkout: editable install with the test tools
+    --venv   where to create the environment (default: .venv next to the program);
+             use it when one folder is shared by Windows and WSL, then start
+             Whispry with WHISPRY_PYTHON set to that environment's python
 """
 
 from __future__ import annotations
@@ -110,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--gpu", action="store_true", help="install GPU libraries")
     group.add_argument("--cpu", action="store_true", help="skip GPU libraries")
+    parser.add_argument("--venv", type=Path, help="folder for the Python environment")
     parser.add_argument("--dev", action="store_true", help="editable install with test tools")
     args = parser.parse_args(argv)
 
@@ -120,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     root = find_root()
-    venv = root / ".venv"
+    venv = args.venv.resolve() if args.venv else root / ".venv"
     python = venv_python(venv)
 
     if not gpu_supported():
@@ -148,6 +152,13 @@ def main(argv: list[str] | None = None) -> int:
                   "install the python3-venv package first.", file=sys.stderr)
             return 1
 
+    probe = run([str(python), "-m", "pip", "--version"], capture_output=True, text=True)
+    if probe.returncode != 0:
+        print(f"The environment in {venv} is broken or was made on another system "
+              "(for example Windows, then used from WSL). Delete that folder, or choose "
+              "another with --venv, and run setup again.", file=sys.stderr)
+        return 1
+
     print("Installing the transcription worker (this can take a few minutes) ...")
     command = [str(python), "-m", "pip", "install", "--disable-pip-version-check",
                *install_target(root / "worker", gpu, args.dev)]
@@ -172,6 +183,8 @@ def main(argv: list[str] | None = None) -> int:
         run([str(program), subcommand], env={**os.environ, "WHISPRY_PYTHON": str(python)})
         print()
     print(f"All set. Start Whispry with: {program}")
+    if args.venv:
+        print(f"Set WHISPRY_PYTHON={python} first so it uses this environment.")
     return 0
 
 
