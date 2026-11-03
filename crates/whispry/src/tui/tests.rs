@@ -265,3 +265,48 @@ fn paths_lose_quotes_and_expand_the_home_folder() {
         assert_eq!(normalize_path("~/x.mp3"), home.join("x.mp3"));
     }
 }
+
+#[test]
+fn browsing_fills_in_the_chosen_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("lecture.mp3"), b"").unwrap();
+    std::fs::write(dir.path().join("notes.txt"), b"").unwrap();
+    let mut app = App::new(Box::new(FakeServices::new(0)), None);
+    app.on_paste(&dir.path().display().to_string());
+
+    ctrl(&mut app, 'o');
+    let text = screen(&app, 100, 30);
+    assert!(text.contains("Choose a file"), "{text}");
+    assert!(
+        text.contains("lecture.mp3") && !text.contains("notes.txt"),
+        "{text}"
+    );
+
+    press(&mut app, KeyCode::Down); // the first entry after ".."
+    press(&mut app, KeyCode::Enter);
+    assert!(!screen(&app, 100, 30).contains("Choose a file"));
+    ctrl(&mut app, 's');
+    assert_eq!(
+        app.into_outcome().unwrap().audio,
+        dir.path().join("lecture.mp3")
+    );
+}
+
+#[test]
+fn cancelling_the_browser_keeps_the_file_field() {
+    let (mut app, _dir, audio) = app_with_file(FakeServices::new(0));
+    ctrl(&mut app, 'o');
+    press(&mut app, KeyCode::Esc);
+    assert!(!screen(&app, 100, 30).contains("Choose a file"));
+    ctrl(&mut app, 's');
+    assert_eq!(app.into_outcome().unwrap().audio, audio);
+}
+
+#[test]
+fn keys_go_to_the_browser_while_it_is_open() {
+    let (mut app, _dir, _) = app_with_file(FakeServices::new(0));
+    ctrl(&mut app, 'o');
+    press(&mut app, KeyCode::Tab);
+    ctrl(&mut app, 's'); // ignored by the browser, so no job starts
+    assert!(!app.is_done());
+}

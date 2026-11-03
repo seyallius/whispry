@@ -6,12 +6,14 @@ use ratatui::Frame;
 use ratatui::crossterm::event::KeyEvent;
 use whispry_core::config::JobConfig;
 
+use super::file_picker::{PickerAction, PickerState};
 use super::services::Services;
 use super::setup::{SetupAction, SetupState};
 
 pub struct App {
     services: Box<dyn Services>,
     setup: SetupState,
+    picker: Option<PickerState>,
     outcome: Option<JobConfig>,
     quit: bool,
 }
@@ -21,6 +23,7 @@ impl App {
         App {
             services,
             setup: SetupState::new(initial_file.as_deref()),
+            picker: None,
             outcome: None,
             quit: false,
         }
@@ -36,9 +39,23 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        if let Some(picker) = &mut self.picker {
+            match picker.handle_key(&key) {
+                PickerAction::None => {}
+                PickerAction::Cancel => self.picker = None,
+                PickerAction::Choose(path) => {
+                    self.setup.choose_file(&path);
+                    self.picker = None;
+                }
+            }
+            return;
+        }
         match self.setup.handle_key(&key, self.services.as_ref()) {
             SetupAction::None => {}
             SetupAction::Quit => self.quit = true,
+            SetupAction::Browse => {
+                self.picker = Some(PickerState::open(&self.setup.browse_start()));
+            }
             SetupAction::Start(config) => {
                 self.outcome = Some(config);
                 self.quit = true;
@@ -47,11 +64,16 @@ impl App {
     }
 
     pub fn on_paste(&mut self, text: &str) {
-        self.setup.handle_paste(text);
+        if self.picker.is_none() {
+            self.setup.handle_paste(text);
+        }
     }
 
     pub fn render(&self, frame: &mut Frame) {
         let area = frame.area();
         self.setup.render(frame, area, self.services.as_ref());
+        if let Some(picker) = &self.picker {
+            picker.render(frame, area);
+        }
     }
 }

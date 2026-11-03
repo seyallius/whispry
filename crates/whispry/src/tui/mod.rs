@@ -2,6 +2,7 @@
 //! job reports; the work itself happens in `whispry-core`.
 
 mod app;
+mod file_picker;
 mod input;
 mod services;
 mod setup;

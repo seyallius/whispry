@@ -36,6 +36,8 @@ pub enum Field {
 pub enum SetupAction {
     None,
     Quit,
+    /// Open the file browser.
+    Browse,
     Start(JobConfig),
 }
 
@@ -240,6 +242,26 @@ impl SetupState {
         }
     }
 
+    /// Where the file browser should open: beside the current file, else at home.
+    pub fn browse_start(&self) -> PathBuf {
+        let current = normalize_path(self.file.text());
+        let beside = if current.is_dir() {
+            Some(current.clone())
+        } else {
+            current.parent().map(PathBuf::from)
+        };
+        beside
+            .filter(|dir| dir.is_dir())
+            .or_else(std::env::home_dir)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    pub fn choose_file(&mut self, path: &std::path::Path) {
+        self.file.set(&path.display().to_string());
+        self.errors.clear();
+    }
+
     pub fn handle_paste(&mut self, text: &str) {
         match self.focus {
             Field::File => self.file.insert(text),
@@ -252,6 +274,7 @@ impl SetupState {
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Char('q' | 'c') if control => return SetupAction::Quit,
+            KeyCode::Char('o') if control => return SetupAction::Browse,
             KeyCode::Char('s') if control => return self.start(services),
             KeyCode::Tab | KeyCode::Down => return self.focus_and_none(true),
             KeyCode::BackTab | KeyCode::Up => return self.focus_and_none(false),
@@ -442,7 +465,14 @@ impl SetupState {
         .areas(area);
 
         self.render_header(frame, header, services);
-        self.render_text_field(frame, file, Field::File, "File", &self.file, "");
+        self.render_text_field(
+            frame,
+            file,
+            Field::File,
+            "File",
+            &self.file,
+            "Ctrl+O browse",
+        );
 
         let [model_area, language_area] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -496,7 +526,7 @@ impl SetupState {
             );
         }
 
-        let hints = " Tab move · ←/→ change · Ctrl+S start · Ctrl+Q quit";
+        let hints = " Tab move · ←/→ change · Ctrl+O browse · Ctrl+S start · Ctrl+Q quit";
         frame.render_widget(
             Paragraph::new(Span::styled(hints, Style::new().fg(DIM))),
             footer,
