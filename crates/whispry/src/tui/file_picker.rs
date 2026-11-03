@@ -244,7 +244,11 @@ impl PickerState {
             );
         }
         let list = List::new(items)
-            .highlight_style(Style::new().add_modifier(Modifier::REVERSED))
+            .highlight_style(
+                Style::new()
+                    .bg(Color::Indexed(238))
+                    .add_modifier(Modifier::BOLD),
+            )
             .highlight_symbol("");
         let mut state = ListState::default().with_selected(Some(self.selected));
         frame.render_stateful_widget(list, list_area, &mut state);
