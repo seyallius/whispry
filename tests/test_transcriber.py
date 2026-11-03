@@ -9,7 +9,7 @@ from whispry.core.transcriber import run_job
 
 @pytest.fixture
 def three_minutes(tmp_path):
-    return make_audio(tmp_path / "talk.mp3", "sine=duration=180")
+    return make_audio(tmp_path / "talk.wav", "sine=duration=180")
 
 
 def test_transcribes_window_by_window_with_bounded_memory(monkeypatch, three_minutes):
@@ -59,3 +59,34 @@ def test_progress_reaches_total(monkeypatch, three_minutes):
     progress = [e for e in events if isinstance(e, Progress)]
     assert progress[-1].completed == pytest.approx(progress[-1].total, abs=0.1)
     assert isinstance(events[-1], Finished)
+
+
+def test_cancel_stops_job_and_keeps_partial_output(monkeypatch, three_minutes):
+    from whispry.core.cancel import CancelToken, JobCancelled
+
+    model = install_fake_model(monkeypatch)
+    token = CancelToken()
+
+    def on_event(event):
+        if isinstance(event, SegmentReady) and event.start >= 60:
+            token.cancel()
+
+    with pytest.raises(JobCancelled) as raised:
+        run_job(JobConfig(three_minutes, chunk_minutes=1), on_event, CPU_SYSTEM, token)
+
+    assert len(model.calls) == 2
+    assert raised.value.output == three_minutes.with_suffix(".txt")
+    assert raised.value.position > 60
+    assert "window 2" in raised.value.output.read_text(encoding="utf-8")
+
+
+def test_cancel_before_start_skips_model_loading(monkeypatch, three_minutes):
+    from whispry.core.cancel import CancelToken, JobCancelled
+
+    model = install_fake_model(monkeypatch)
+    token = CancelToken()
+    token.cancel()
+
+    with pytest.raises(JobCancelled):
+        run_job(JobConfig(three_minutes), lambda e: None, CPU_SYSTEM, token)
+    assert model.calls == []

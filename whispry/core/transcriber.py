@@ -6,6 +6,7 @@ import time
 from contextlib import closing
 
 from whispry.core.audio import stream_audio
+from whispry.core.cancel import CancelToken, JobCancelled
 from whispry.core.chunking import iter_windows
 from whispry.core.config import BEAM_SIZE, JobConfig
 from whispry.core.cuda_libs import prepare_cuda_libraries
@@ -89,14 +90,25 @@ def run_job(
     config: JobConfig,
     on_event: EventSink = ignore_event,
     system: SystemInfo | None = None,
+    cancel: CancelToken | None = None,
 ) -> Finished:
     """Transcribe `config.audio` and write timestamped text to the output file.
 
     Audio is decoded and transcribed one window (`config.chunk_minutes`) at a
     time, so memory use does not grow with the length of the file.
+
+    Raises JobCancelled soon after `cancel` is triggered (checked between
+    segments); text transcribed so far stays in the output file.
     """
     job_start = time.perf_counter()
     system = system or detect_system()
+    cancel = cancel or CancelToken()
+    output = config.output_path
+    position = 0.0
+
+    def check_cancelled():
+        if cancel.cancelled:
+            raise JobCancelled(output if output.exists() else None, position)
 
     # Fail fast on an impossible device or missing FFmpeg before downloading.
     resolve_device(config.device, system, config.compute_type)
@@ -104,7 +116,9 @@ def run_job(
     on_event(Log(f"Using {ffmpeg.source} FFmpeg: {ffmpeg.ffmpeg}"))
 
     model_dir = ensure_model(config.model, on_event)
+    check_cancelled()
     model = load_model(model_dir, config, system, on_event)
+    check_cancelled()
 
     duration = probe_duration(ffmpeg, config.audio)
     on_event(StageStarted(Stage.TRANSCRIBE, "Transcribing..."))
@@ -116,13 +130,12 @@ def run_job(
         on_event(LanguageDetected(language, 1.0))
 
     prompt = None
-    position = 0.0
-    output = config.output_path
 
     with output.open("w", encoding="utf-8") as file, closing(
         stream_audio(config.audio, ffmpeg)
     ) as blocks:
         for window in iter_windows(blocks, config.chunk_minutes * 60):
+            check_cancelled()
             texts = []
             segments, info = model.transcribe(
                 window.samples,
@@ -143,6 +156,8 @@ def run_job(
 
                 on_event(SegmentReady(segment_start, segment_end, text))
                 on_event(Progress(Stage.TRANSCRIBE, segment_end, duration, "s"))
+                position = segment_end
+                check_cancelled()
 
             # Lock the language once speech is found, so windows stay consistent.
             if language is None and texts:
