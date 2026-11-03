@@ -4,6 +4,7 @@
 //! This crate never prints. Front ends (the TUI and the CLI) turn user input
 //! into a job and render the events the job emits.
 
+pub mod audio;
 pub mod config;
 pub mod events;
 pub mod ffmpeg;
