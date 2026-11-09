@@ -73,16 +73,20 @@ jobs:
           fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
 
+  # CPU editions. The engine (CTranslate2) is compiled from source by cmake
+  # during `cargo build`, which takes a few minutes.
   build:
     name: Build ${{ matrix.target }}
     needs: plan
     if: needs.plan.outputs.build == 'true'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: true
       matrix:
         include:
-          - os: ubuntu-latest
+          # Built on an older Ubuntu so the program runs on older glibc too.
+          - os: ubuntu-22.04
             target: linux-x86_64
             rust_target: x86_64-unknown-linux-gnu
             binary: whispry
@@ -94,8 +98,9 @@ jobs:
             target: macos-arm64
             rust_target: aarch64-apple-darwin
             binary: whispry
-          # Cross-built on the Apple silicon runner.
-          - os: macos-latest
+          # Built natively on an Intel runner: the CTranslate2 build script picks
+          # the architecture from the machine it runs on, so cross-building is risky.
+          - os: macos-15-intel
             target: macos-x86_64
             rust_target: x86_64-apple-darwin
             binary: whispry
@@ -121,22 +126,12 @@ jobs:
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
-      # ---- Install build tools -------------------------------------------
-      # One step per OS; fill in whatever the build needs (apt, choco, brew).
-      - name: Install build tools
-        if: runner.os == 'Linux'
-        run: |
-          : # sudo apt-get update && sudo apt-get install -y ...
-      - name: Install build tools
-        if: runner.os == 'Windows'
+      # Hosted runners ship cmake and a C++ compiler; fail early if not.
+      - name: Check the build tools
         shell: bash
         run: |
-          : # choco install -y ...
-      - name: Install build tools
-        if: runner.os == 'macOS'
-        run: |
-          : # brew install ...
-      # ---------------------------------------------------------------------
+          cmake --version
+          if [ "$RUNNER_OS" != "Windows" ]; then c++ --version; fi
 
       - name: Add the build target
         run: rustup target add ${{ matrix.rust_target }}
@@ -178,9 +173,143 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # CUDA editions (optional). Needs the CUDA toolkit to build; cuBLAS is loaded
+  # at run time. A failure here never blocks the CPU release: the job is
+  # allowed to fail, and the publish job uploads whichever archives exist.
+  build-cuda:
+    name: Build ${{ matrix.target }}
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    continue-on-error: true
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: linux-x86_64-cuda
+            rust_target: x86_64-unknown-linux-gnu
+            binary: whispry
+          - os: windows-2022
+            target: windows-x86_64-cuda
+            rust_target: x86_64-pc-windows-msvc
+            binary: whispry.exe
+    env:
+      # GPU architectures to compile for (read by the ct2rs build script).
+      # Kept short to bound build time.
+      CUDA_ARCH_LIST: "7.5;8.6;8.9"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Find the version, and check a tag matches it
+        shell: bash
+        run: |
+          version="$(python3 - <<'PY'
+          import tomllib
+          with open("Cargo.toml", "rb") as f:
+              print(tomllib.load(f)["workspace"]["package"]["version"])
+          PY
+          )"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      # Pinned to a release tag; CUDA 12.4.1 is offered for both platforms.
+      - name: Install the CUDA toolkit (Linux)
+        id: cuda_linux
+        if: runner.os == 'Linux'
+        uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: "12.4.1"
+          method: network
+          sub-packages: '["nvcc", "cudart", "cudart-dev", "cccl"]'
+          non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
+
+      - name: Install the CUDA toolkit (Windows)
+        id: cuda_windows
+        if: runner.os == 'Windows'
+        uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: "12.4.1"
+          method: network
+          sub-packages: '["nvcc", "cudart", "cublas_dev", "thrust", "visual_studio_integration"]'
+
+      - name: Point the build at the toolkit
+        shell: bash
+        env:
+          CUDA_ROOT: ${{ steps.cuda_linux.outputs.CUDA_PATH || steps.cuda_windows.outputs.CUDA_PATH }}
+        run: |
+          if [ -z "$CUDA_ROOT" ]; then
+            echo "The CUDA toolkit action did not report an install path" >&2
+            exit 1
+          fi
+          echo "CUDA_TOOLKIT_ROOT_DIR=$CUDA_ROOT" >> "$GITHUB_ENV"
+          echo "CUDA toolkit: $CUDA_ROOT"
+
+      - name: Check the build tools
+        shell: bash
+        run: |
+          cmake --version
+          nvcc --version
+          if [ "$RUNNER_OS" != "Windows" ]; then c++ --version; fi
+
+      - name: Add the build target
+        run: rustup target add ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cuda-${{ matrix.rust_target }}
+
+      - name: Build
+        run: cargo build --release --locked --features cuda --target ${{ matrix.rust_target }}
+
+      - name: Package
+        shell: bash
+        run: python3 scripts/package.py --binary "target/${{ matrix.rust_target }}/release/${{ matrix.binary }}" --version "$VERSION" --target ${{ matrix.target }} --out dist
+
+      # The CUDA libraries are loaded only when asked for, so the program must
+      # start on a machine that has none. Run it with the toolkit hidden.
+      - name: Check the archive starts without CUDA libraries
+        shell: bash
+        run: |
+          mkdir unpacked
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            7z x dist/*.zip -ounpacked > /dev/null
+          else
+            tar xzf dist/*.tar.gz -C unpacked
+          fi
+          cd unpacked/whispry-*
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            ldd ./${{ matrix.binary }}
+            env -u LD_LIBRARY_PATH ./${{ matrix.binary }} --version
+          else
+            clean_path="$(printf '%s' "$PATH" | tr ':' '\n' | grep -vi 'cuda' | paste -sd: -)"
+            env -u CUDA_PATH PATH="$clean_path" ./${{ matrix.binary }} --version
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Report in the run summary
+        if: always()
+        shell: bash
+        run: |
+          echo "CUDA edition ${{ matrix.target }}: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
+
   publish:
     name: Publish the release
-    needs: build
+    # The CUDA jobs may fail without failing the run; publish what exists.
+    needs: [build, build-cuda]
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' &&

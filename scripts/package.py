@@ -5,8 +5,8 @@
         --version 0.3.0 --target linux-x86_64 --out dist
 
 Windows targets get a .zip, everything else a .tar.gz. Unzipping gives one
-folder, whispry-<version>-<target>. A worker/ folder and scripts/setup.py are
-added only if they exist in the repository.
+folder, whispry-<version>-<target>. The target may end in -cuda for the CUDA
+edition, for example linux-x86_64-cuda.
 """
 
 from __future__ import annotations
@@ -20,17 +20,11 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LEFT_OUT = shutil.ignore_patterns("tests", "__pycache__", "*.pyc", ".pytest_cache", "*.egg-info", "build")
-
 
 def build_folder(root: Path, binary: Path, destination: Path) -> None:
     """Lay out the release folder."""
     destination.mkdir(parents=True)
     shutil.copy2(binary, destination / binary.name)
-    if (root / "worker").is_dir():
-        shutil.copytree(root / "worker", destination / "worker", ignore=LEFT_OUT)
-    if (root / "scripts" / "setup.py").is_file():
-        shutil.copy2(root / "scripts" / "setup.py", destination / "setup.py")
     for name in ("LICENSE", "README.md"):
         if (root / name).is_file():
             shutil.copy2(root / name, destination / name)

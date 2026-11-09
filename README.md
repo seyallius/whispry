@@ -11,34 +11,30 @@
 
 Whispry is a friendly terminal app for speech-to-text. Point it at a
 meeting, lecture, interview, or voice memo, and watch the transcript
-appear line by line. It runs on Linux and Windows, uses your NVIDIA GPU
-when you have one, and works fine on a plain laptop CPU when you don't.
+appear line by line. It runs on Linux, Windows and macOS, works on a plain
+laptop CPU, and can use an NVIDIA GPU if you choose to set that up.
 
-Under the hood it uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
-and CTranslate2, OpenAI's Whisper models made fast. The app itself is
-written in Rust, so it starts instantly and stays light.
+Under the hood it runs OpenAI's Whisper models with
+[CTranslate2](https://github.com/OpenNMT/CTranslate2), built into the program
+itself. It is a single Rust program: no Python, no virtual environment, no
+setup step.
 
 ## Quick start
 
-1. Download the archive for your system from the
+1. Install [FFmpeg](#ffmpeg) if you don't have it.
+2. Download the archive for your system from the
    [Releases page](https://github.com/seyallius/whispry/releases) and unpack it.
-2. Run the one-time setup. It needs Python 3.10 or newer, and nothing else:
+3. Run it:
 
    ```bash
    cd whispry-0.3.0-linux-x86_64
-   python3 setup.py          # Windows: py setup.py
-   ```
-
-3. Start Whispry:
-
-   ```bash
    ./whispry                 # Windows: .\whispry.exe
    ```
 
-Setup figures out whether you have an NVIDIA GPU, installs only what your
-machine needs into a private `.venv` folder next to the program, and checks
-whether FFmpeg is installed. It asks nothing and installs nothing
-system-wide.
+That's it. The first time you transcribe, Whispry downloads the speech model
+you picked (once; after that it works offline). The plain archives run on the
+CPU and need no GPU. See [GPU acceleration](#gpu-acceleration-optional) if you
+have an NVIDIA GPU.
 
 ## A quick tour
 
@@ -81,8 +77,8 @@ _Screenshots show demo content._
 ## Features
 
 - **Private by design:** your audio never leaves your computer
-- **CPU or GPU:** runs anywhere, uses an NVIDIA GPU automatically when
-  available, and falls back to the CPU if the GPU has trouble
+- **CPU everywhere, GPU if you want it:** the standard edition runs on the
+  CPU; an optional CUDA edition can use an NVIDIA GPU
 - **Handles long recordings:** audio is processed a few minutes at a time,
   so a three-hour recording needs no more memory for audio than a
   three-minute one
@@ -95,38 +91,64 @@ _Screenshots show demo content._
 
 ## Requirements
 
-- Linux or Windows (64-bit)
-- Python 3.10 or newer, for the one-time setup and the transcription worker
+- Linux or Windows (64-bit Intel/AMD), or macOS on Apple silicon or Intel
 - FFmpeg (see [below](#ffmpeg))
-- Optional: an NVIDIA GPU with a recent driver (CUDA 12)
-- Internet access for setup and for the first download of each model
+- Internet access for the first download of each model
+- Optional, Linux and Windows only: an NVIDIA GPU with a recent driver, and
+  the CUDA edition (see [GPU acceleration](#gpu-acceleration-optional))
 
 ## Installation
 
-The [quick start](#quick-start) covers most people. In more detail:
+Download the archive for your system from the
+[Releases page](https://github.com/seyallius/whispry/releases), unpack it, and
+run `whispry`. There is nothing else to install. Archives are named
+`whispry-<version>-<system>`:
 
-`setup.py` creates a `.venv` folder next to the program and installs the
-transcription worker into it. It adds the NVIDIA CUDA libraries only when it
-finds an NVIDIA GPU, about 1.3 GB, and skips that download when the CUDA
-libraries are already installed on your computer. Pass `--gpu` or `--cpu` to choose yourself. Whispry
-finds that folder on its own; to use another Python, set `WHISPRY_PYTHON` to
-its path.
+| Archive | For |
+|---|---|
+| `linux-x86_64` | Linux, 64-bit Intel/AMD (built against a fairly old glibc; very old distributions may not work) |
+| `windows-x86_64` | Windows, 64-bit |
+| `macos-arm64` | macOS on Apple silicon (CPU only) |
+| `macos-x86_64` | macOS on Intel (CPU only) |
+| `linux-x86_64-cuda`, `windows-x86_64-cuda` | The same, with optional NVIDIA GPU support |
+
+The CUDA editions may be missing from a release if their build failed; the
+CPU editions are always published.
+
+### GPU acceleration (optional)
+
+The CPU edition works everywhere and is the right choice unless you have an
+NVIDIA GPU. For a GPU:
+
+1. Download the archive whose name ends in `-cuda`.
+2. Run `whispry gpu` to see the GPU status.
+3. Run `whispry gpu --install` to download the NVIDIA cuBLAS library
+   (about 550 MB).
+
+Nothing is downloaded unless you ask. If your computer has no NVIDIA GPU, no
+CUDA downloads are offered at all. CUDA libraries that are already on your
+computer are reused instead of downloaded again. Without them, the CUDA
+edition simply runs on the CPU.
 
 ### Building from source
 
-You need [Rust](https://rustup.rs) and Python 3.10 or newer.
+You need [Rust](https://rustup.rs), [CMake](https://cmake.org) and a C++
+compiler (GCC or Clang on Linux, Xcode command line tools on macOS, Visual
+Studio Build Tools on Windows). The first build compiles CTranslate2 from
+source and takes several minutes.
 
 ```bash
 git clone https://github.com/seyallius/whispry.git
 cd whispry
 cargo build --release
-python3 scripts/setup.py          # Windows: py scripts\setup.py
-./target/release/whispry          # run it from the checkout folder
+./target/release/whispry
 ```
 
-Run the program from inside the checkout so it finds the `.venv` there, or
-set `WHISPRY_PYTHON` to `.venv/bin/python` (Windows:
-`.venv\Scripts\python.exe`).
+For the CUDA edition, install the NVIDIA CUDA toolkit (12.x) and build with:
+
+```bash
+cargo build --release --features cuda
+```
 
 ### FFmpeg
 
@@ -163,7 +185,9 @@ You can also paste a path, quotes and all, straight into the file field.
 whispry transcribe recording.mp3
 whispry transcribe recording.mp3 --language fa --model medium
 whispry transcribe recording.mp4 --device cpu --output notes.txt
-whispry devices          # OS, CPU and GPU, FFmpeg, and the worker in use
+whispry devices          # OS, CPU and GPU, and FFmpeg
+whispry gpu              # NVIDIA GPU status (CUDA edition)
+whispry gpu --install    # download the cuBLAS library (~550 MB)
 whispry ffmpeg           # check for FFmpeg, or show how to install it
 whispry download medium  # pre-download a model for offline use
 ```
@@ -182,6 +206,7 @@ Whispry uses the Small model by default. Each model is downloaded from
 Hugging Face on first use and cached in:
 
 - Linux: `~/.cache/whispry/models`
+- macOS: `~/Library/Caches/whispry/models`
 - Windows: `%LOCALAPPDATA%\whispry\models`
 
 Set `WHISPRY_MODEL_DIR` to use another folder. After a model is cached,
@@ -190,9 +215,7 @@ transcription works offline.
 ## How it works
 
 1. Detect the OS, whether a usable NVIDIA GPU is present, and FFmpeg.
-2. Find the selected model, or download it, and have the worker load it on
-   the chosen device. The worker picks the best compute type the device
-   supports.
+2. Find the selected model, or download it, and load it on the chosen device.
 3. Stream the decoded audio from FFmpeg in small blocks.
 4. Group blocks into windows of about 10 minutes, ending each window in the
    longest pause near its end, so no word is cut in half.
@@ -200,56 +223,52 @@ transcription works offline.
    cut at pauses. The language is detected once and then kept.
 6. Write each timestamped line to the output file as soon as it is ready.
 
-The code is split into three parts:
+The code is split into two parts:
 
 - `crates/whispry-core/`: all the logic (detection, FFmpeg, streaming,
   chunking, models, the job runner). It never prints; it reports progress
   through typed events and can be cancelled from another thread.
 - `crates/whispry/`: the terminal UI and the command line. They only turn
   user input into a job and draw the events it emits.
-- `worker/`: a small Python program that runs faster-whisper. Whispry starts
-  it as a separate process and talks to it with one JSON message per line,
-  described in [`worker/PROTOCOL.md`](worker/PROTOCOL.md). A crash in GPU code
-  can't take the interface down, and cancelling is just a message.
 
 ## Development
 
-You need [Rust](https://rustup.rs), Python 3.10 or newer, and
-[just](https://github.com/casey/just) for the recipes. Run `just` to list
-them.
+You need [Rust](https://rustup.rs), CMake and a C++ compiler (see
+[Building from source](#building-from-source)). Python 3 with `pytest` is
+needed only for the packaging script tests, and
+[just](https://github.com/casey/just) for the recipes. Run `just` to list them.
 
 ```bash
-just setup   # create .venv with the worker and its test tools
-just test    # Rust tests, worker tests and script tests
+just test    # Rust tests and packaging script tests
 just lint    # formatting and clippy
 just run     # run Whispry from the checkout
-just check   # show detected devices, FFmpeg and the worker
+just check   # show detected devices and FFmpeg
 ```
 
-Tests that need FFmpeg or Python are skipped when those are missing. Set
-`WHISPRY_TEST_STRICT=1` to make them fail instead, as CI does on Linux and
-Windows.
+Tests that need FFmpeg are skipped when it is missing. Set
+`WHISPRY_TEST_STRICT=1` to make them fail instead, as CI does.
 
 To publish a release, push a tag such as `v0.3.0` (it must match the
-version in `Cargo.toml`). GitHub Actions builds the Linux and Windows
-archives and attaches them to a new release.
+version in `Cargo.toml`). GitHub Actions builds the archives for Linux,
+Windows and macOS (plus the optional CUDA editions) and attaches them to a
+new release.
 
 ## Limitations
 
-- GPU acceleration requires an NVIDIA GPU with CUDA 12 support. Apple
-  Silicon and AMD GPUs are not supported.
-- The CPU is much slower than a GPU, especially with the Medium model.
+- GPU acceleration requires an NVIDIA GPU, the CUDA edition, and Linux or
+  Windows. Apple silicon GPUs and AMD GPUs are not supported; macOS runs on
+  the CPU.
+- The CPU is slower than a GPU, especially with the Medium model.
 - Progress is estimated from completed segments.
 - The Small model may be less accurate for difficult Persian audio.
-- Linux and Windows on 64-bit Intel and AMD processors are supported.
 
 ## Privacy
 
 Audio processing happens locally.
 
-Model downloads contact Hugging Face when a model is missing, and setup
-contacts the Python package index. No audio file is uploaded by the
-application.
+Model downloads contact Hugging Face when a model is missing, and
+`whispry gpu --install` downloads the cuBLAS library when you ask for it. No
+audio file is uploaded by the application.
 
 ## License
 

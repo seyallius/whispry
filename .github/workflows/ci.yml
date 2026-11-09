@@ -6,7 +6,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Tests that need FFmpeg or Python fail instead of skipping.
+  # Tests that need FFmpeg fail instead of skipping.
   WHISPRY_TEST_STRICT: "1"
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -24,12 +24,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Python test dependencies
-        run: python -m pip install numpy pytest
-
-      - name: Tell the tests which Python to use
-        shell: bash
-        run: echo "WHISPRY_PYTHON=$(python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+      - name: Install pytest
+        run: python -m pip install pytest
 
       - name: Install FFmpeg (Linux)
         if: runner.os == 'Linux'
@@ -38,6 +34,14 @@ jobs:
       - name: Install FFmpeg (Windows)
         if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
+
+      - name: Install FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - name: Check the build tools
+        shell: bash
+        run: cmake --version
 
       - uses: Swatinem/rust-cache@v2
 
@@ -50,9 +54,83 @@ jobs:
       - name: Test the Rust crates
         run: cargo test --workspace
 
-      - name: Test the worker
-        working-directory: worker
-        run: python -m pytest -q
-
-      - name: Test the setup script
+      - name: Test the packaging script
         run: python -m pytest -q scripts
+
+  # End to end: speak a sentence, transcribe it with a real model, check the text.
+  smoke:
+    name: Transcribe on ${{ matrix.os }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      # Where Whispry keeps downloaded models; cached between runs.
+      WHISPRY_MODEL_DIR: ${{ github.workspace }}/.whispry-models
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FFmpeg and a speech synthesizer (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg espeak-ng
+
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Install FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: smoke
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Make a speech clip (Linux)
+        if: runner.os == 'Linux'
+        run: espeak-ng -w clip.wav "Hello world. This is a test of the transcription program."
+
+      - name: Make a speech clip (macOS)
+        if: runner.os == 'macOS'
+        run: say -o clip.aiff "Hello world. This is a test of the transcription program."
+
+      - name: Make a speech clip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Speech
+          $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+          $s.SetOutputToWaveFile((Join-Path $PWD 'clip.wav'))
+          $s.Speak('Hello world. This is a test of the transcription program.')
+          $s.Dispose()
+
+      - name: Restore the model cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.whispry-models
+          key: whispry-model-small-v1
+
+      - name: Transcribe
+        shell: bash
+        run: |
+          clip="$(ls clip.wav clip.aiff 2>/dev/null | head -n1)"
+          start=$SECONDS
+          ./target/release/whispry transcribe "$clip" --model small --device cpu --language en
+          echo "Elapsed: $((SECONDS - start)) s"
+          echo "--- clip.txt ---"
+          cat clip.txt
+          echo "----------------"
+          if [ ! -s clip.txt ]; then
+            echo "The transcript is empty" >&2
+            exit 1
+          fi
+          if ! grep -qi "test" clip.txt; then
+            echo "The transcript does not contain the word 'test'" >&2
+            exit 1
+          fi
