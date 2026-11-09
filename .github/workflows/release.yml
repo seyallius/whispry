@@ -229,7 +229,7 @@ jobs:
         with:
           cuda: "12.4.1"
           method: network
-          sub-packages: '["nvcc", "cudart", "cudart-dev", "cccl"]'
+          sub-packages: '["nvcc", "cudart", "cudart-dev", "cccl", "curand-dev"]'
           non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
 
       - name: Install the CUDA toolkit (Windows)
@@ -239,7 +239,7 @@ jobs:
         with:
           cuda: "12.4.1"
           method: network
-          sub-packages: '["nvcc", "cudart", "cublas_dev", "thrust", "visual_studio_integration"]'
+          sub-packages: '["nvcc", "cudart", "cublas_dev", "curand_dev", "thrust", "visual_studio_integration"]'
 
       - name: Point the build at the toolkit
         shell: bash
@@ -250,6 +250,8 @@ jobs:
             echo "The CUDA toolkit action did not report an install path" >&2
             exit 1
           fi
+          # CMake cannot parse backslashes in the path, so use forward slashes.
+          CUDA_ROOT="${CUDA_ROOT//\\//}"
           echo "CUDA_TOOLKIT_ROOT_DIR=$CUDA_ROOT" >> "$GITHUB_ENV"
           echo "CUDA toolkit: $CUDA_ROOT"
 

@@ -756,11 +756,17 @@ mod tests {
     #[test]
     fn relaunch_prepends_to_the_loader_path() {
         let dirs = [PathBuf::from("/c/cuda")];
+        // Path syntax differs per host, so build the values the same way.
+        let existing = std::env::join_paths(["/a", "/b"]).unwrap();
+        let existing = existing.to_str().unwrap();
         let (var, value) =
-            relaunch_environment(Os::Linux, &dirs, &env_of(&[("LD_LIBRARY_PATH", "/a:/b")]))
+            relaunch_environment(Os::Linux, &dirs, &env_of(&[("LD_LIBRARY_PATH", existing)]))
                 .unwrap();
         assert_eq!(var, "LD_LIBRARY_PATH");
-        assert_eq!(value, OsString::from("/c/cuda:/a:/b"));
+        assert_eq!(
+            value,
+            std::env::join_paths(["/c/cuda", "/a", "/b"]).unwrap()
+        );
 
         let (var, value) = relaunch_environment(Os::Linux, &dirs, &env_of(&[])).unwrap();
         assert_eq!(var, "LD_LIBRARY_PATH");
@@ -788,11 +794,12 @@ mod tests {
             None
         );
         // Already on the path.
+        let on_path = std::env::join_paths(["/x", "/c/cuda"]).unwrap();
         assert_eq!(
             relaunch_environment(
                 Os::Linux,
                 &dirs,
-                &env_of(&[("LD_LIBRARY_PATH", "/x:/c/cuda")])
+                &env_of(&[("LD_LIBRARY_PATH", on_path.to_str().unwrap())])
             ),
             None
         );

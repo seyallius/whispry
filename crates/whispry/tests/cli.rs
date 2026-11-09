@@ -76,8 +76,10 @@ fn an_unavailable_gpu_is_a_clean_error() {
     }
     let output = whispry(&["transcribe", audio.to_str().unwrap(), "--device", "cuda"]);
     assert_eq!(output.status.code(), Some(1));
+    // macOS says CUDA is not supported there; other systems say no GPU was found.
     assert!(
-        text(&output.stderr).contains("No NVIDIA GPU"),
+        text(&output.stderr).contains("No NVIDIA GPU")
+            || text(&output.stderr).contains("not supported on macOS"),
         "{}",
         text(&output.stderr)
     );
