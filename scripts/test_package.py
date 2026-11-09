@@ -29,7 +29,22 @@ def repo(tmp_path):
     return root, binary
 
 
-def test_linux_archive_holds_the_program_worker_and_setup_script(repo, tmp_path):
+def test_archive_holds_only_the_program_and_docs_without_worker_or_setup(repo, tmp_path):
+    root, binary = repo
+    import shutil
+    shutil.rmtree(root / "worker")
+    (root / "scripts" / "setup.py").unlink()
+    (root / "README.md").write_text("readme")
+    archive = package.package(root, binary, "1.2.3", "macos-arm64", tmp_path / "dist")
+
+    assert archive.name == "whispry-1.2.3-macos-arm64.tar.gz"
+    folder = "whispry-1.2.3-macos-arm64"
+    with tarfile.open(archive) as tar:
+        assert sorted(tar.getnames()) == sorted(
+            [folder] + [f"{folder}/{n}" for n in ["LICENSE", "README.md", "whispry"]])
+
+
+def test_linux_archive_includes_worker_and_setup_script_when_present(repo, tmp_path):
     root, binary = repo
     archive = package.package(root, binary, "1.2.3", "linux-x86_64", tmp_path / "dist")
 
@@ -72,6 +87,6 @@ def test_the_real_repository_packages(tmp_path):
     archive = package.package(package.ROOT, binary, "0.0.0", "linux-x86_64", tmp_path / "dist")
     with tarfile.open(archive) as tar:
         names = tar.getnames()
-    assert "whispry-0.0.0-linux-x86_64/setup.py" in names
-    assert "whispry-0.0.0-linux-x86_64/worker/whispry_worker/server.py" in names
+    assert "whispry-0.0.0-linux-x86_64/whispry" in names
+    assert "whispry-0.0.0-linux-x86_64/LICENSE" in names
     assert not any("/tests" in name for name in names)

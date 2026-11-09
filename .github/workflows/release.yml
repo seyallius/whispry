@@ -1,44 +1,104 @@
 name: Release
 
-# Push a tag like v0.3.0 to build the archives and publish a release.
-# Changes to the release files only build the archives, as a check.
+# Pushes to main, version tags (v*) and manual runs build the archives and
+# publish a GitHub Release named after the version in Cargo.toml. If that
+# release already exists the publish step is skipped (bump the version), unless
+# a manual run sets `republish` to overwrite its assets.
+# Pull requests, and pushes to other branches that touch release files, only
+# build and check the archives.
 on:
   push:
-    tags: ["v*"]
     branches: ["**"]
-    paths:
-      - ".github/workflows/release.yml"
-      - "scripts/package.py"
-      - "scripts/setup.py"
-      - "worker/pyproject.toml"
+    tags: ["v*"]
   pull_request:
     paths:
       - ".github/workflows/release.yml"
       - "scripts/package.py"
-      - "scripts/setup.py"
-      - "worker/pyproject.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+    inputs:
+      republish:
+        description: "Overwrite the assets of the release if it already exists"
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && 'publish' || github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  # Decide whether this run builds. Pushes to branches other than main only
+  # build when a release-related file changed.
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: plan
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          build=false
+          if [[ "$EVENT" == "pull_request" ]]; then
+            # The `paths` filter on pull_request already limited this run.
+            build=true
+          elif [[ "$EVENT" == "workflow_dispatch" || "$REF" == "refs/heads/main" || "$REF" == refs/tags/v* ]]; then
+            build=true
+          elif [[ "$EVENT" == "push" ]]; then
+            if [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              # New branch or unknown base: compare against the default branch.
+              base="$(git merge-base HEAD origin/main 2>/dev/null || true)"
+            else
+              base="$BEFORE"
+            fi
+            if [[ -z "$base" ]]; then
+              changed="all"
+            else
+              changed="$(git diff --name-only "$base" HEAD)"
+            fi
+            if [[ "$changed" == "all" ]] || grep -qxE '\.github/workflows/release\.yml|scripts/package\.py|Cargo\.toml|Cargo\.lock' <<<"$changed"; then
+              build=true
+            fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
   build:
-    name: Build for ${{ matrix.target }}
+    name: Build ${{ matrix.target }}
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
       matrix:
         include:
-          # Linux is built against musl, so the program has no dependencies and
-          # runs on any distribution, old or new.
           - os: ubuntu-latest
             target: linux-x86_64
-            rust_target: x86_64-unknown-linux-musl
+            rust_target: x86_64-unknown-linux-gnu
             binary: whispry
           - os: windows-latest
             target: windows-x86_64
             rust_target: x86_64-pc-windows-msvc
             binary: whispry.exe
+          - os: macos-latest
+            target: macos-arm64
+            rust_target: aarch64-apple-darwin
+            binary: whispry
+          # Cross-built on the Apple silicon runner.
+          - os: macos-latest
+            target: macos-x86_64
+            rust_target: x86_64-apple-darwin
+            binary: whispry
     steps:
       - uses: actions/checkout@v4
 
@@ -46,35 +106,51 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: Swatinem/rust-cache@v2
-
       - name: Find the version, and check a tag matches it
         shell: bash
         run: |
-          crate_version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
-          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$crate_version" ]]; then
-            echo "Tag $GITHUB_REF_NAME does not match version $crate_version in Cargo.toml" >&2
+          version="$(python3 - <<'PY'
+          import tomllib
+          with open("Cargo.toml", "rb") as f:
+              print(tomllib.load(f)["workspace"]["package"]["version"])
+          PY
+          )"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match version $version in Cargo.toml" >&2
             exit 1
           fi
-          echo "VERSION=$crate_version" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
 
-      - name: Install the musl tools (Linux)
+      # ---- Install build tools -------------------------------------------
+      # One step per OS; fill in whatever the build needs (apt, choco, brew).
+      - name: Install build tools
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: |
+          : # sudo apt-get update && sudo apt-get install -y ...
+      - name: Install build tools
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          : # choco install -y ...
+      - name: Install build tools
+        if: runner.os == 'macOS'
+        run: |
+          : # brew install ...
+      # ---------------------------------------------------------------------
 
       - name: Add the build target
         run: rustup target add ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.rust_target }}
 
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.rust_target }}
 
       - name: Package
-        run: python scripts/package.py --binary target/${{ matrix.rust_target }}/release/${{ matrix.binary }} --version "$env:VERSION" --target ${{ matrix.target }} --out dist
-        if: runner.os == 'Windows'
-
-      - name: Package
-        run: python scripts/package.py --binary target/${{ matrix.rust_target }}/release/${{ matrix.binary }} --version "$VERSION" --target ${{ matrix.target }} --out dist
-        if: runner.os != 'Windows'
+        shell: bash
+        run: python3 scripts/package.py --binary "target/${{ matrix.rust_target }}/release/${{ matrix.binary }}" --version "$VERSION" --target ${{ matrix.target }} --out dist
 
       - name: Check the archive starts
         shell: bash
@@ -86,13 +162,15 @@ jobs:
             tar xzf dist/*.tar.gz -C unpacked
           fi
           cd unpacked/whispry-*
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            file ${{ matrix.binary }} | grep -qE "statically linked|static-pie linked" || { echo "The Linux program must be statically linked" >&2; exit 1; }
+          if [ "${{ matrix.target }}" = "macos-x86_64" ]; then
+            # An Intel binary: runs on the Apple silicon runner through Rosetta.
+            file ${{ matrix.binary }}
+            if ! ./${{ matrix.binary }} --version; then
+              echo "::warning::Could not run the Intel binary here (no Rosetta); skipped the start check"
+            fi
+          else
+            ./${{ matrix.binary }} --version
           fi
-          ./${{ matrix.binary }} --version
-          test -f setup.py
-          test -f worker/pyproject.toml
-          python setup.py --help > /dev/null
 
       - uses: actions/upload-artifact@v4
         with:
@@ -103,16 +181,53 @@ jobs:
   publish:
     name: Publish the release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           pattern: archive-*
           merge-multiple: true
 
-      - name: Create the release
+      - name: Find the version
+        run: |
+          VERSION="$(python3 - <<'PY'
+          import tomllib
+          with open("Cargo.toml", "rb") as f:
+              print(tomllib.load(f)["workspace"]["package"]["version"])
+          PY
+          )"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$VERSION" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match version $VERSION in Cargo.toml" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: sha256sum -- *.tar.gz *.zip > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "Whispry ${GITHUB_REF_NAME#v}" --generate-notes
+          GH_REPO: ${{ github.repository }}
+          REPUBLISH: ${{ inputs.republish }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            if [[ "$REPUBLISH" == "true" ]]; then
+              gh release upload "$tag" dist/* --clobber
+            else
+              echo "::notice::Release $tag already exists; bump the version in Cargo.toml to publish a new release. Skipping."
+            fi
+          else
+            gh release create "$tag" dist/* --target "$GITHUB_SHA" --title "Whispry $VERSION" --generate-notes
+          fi

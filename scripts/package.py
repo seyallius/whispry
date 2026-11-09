@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Build a release archive: the program, the worker and the setup script.
+"""Build a release archive: the program, LICENSE and README.md.
 
     python3 scripts/package.py --binary target/release/whispry \
         --version 0.3.0 --target linux-x86_64 --out dist
 
 Windows targets get a .zip, everything else a .tar.gz. Unzipping gives one
-folder, whispry-<version>-<target>, ready for its setup.py to be run.
+folder, whispry-<version>-<target>. A worker/ folder and scripts/setup.py are
+added only if they exist in the repository.
 """
 
 from __future__ import annotations
@@ -26,8 +27,10 @@ def build_folder(root: Path, binary: Path, destination: Path) -> None:
     """Lay out the release folder."""
     destination.mkdir(parents=True)
     shutil.copy2(binary, destination / binary.name)
-    shutil.copytree(root / "worker", destination / "worker", ignore=LEFT_OUT)
-    shutil.copy2(root / "scripts" / "setup.py", destination / "setup.py")
+    if (root / "worker").is_dir():
+        shutil.copytree(root / "worker", destination / "worker", ignore=LEFT_OUT)
+    if (root / "scripts" / "setup.py").is_file():
+        shutil.copy2(root / "scripts" / "setup.py", destination / "setup.py")
     for name in ("LICENSE", "README.md"):
         if (root / name).is_file():
             shutil.copy2(root / name, destination / name)
