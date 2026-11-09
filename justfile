@@ -1,14 +1,9 @@
 # Whispry developer recipes. Users don't need just: see the README.
 
-python := if os_family() == "windows" { justfile_directory() + "/.venv/Scripts/python.exe" } else { justfile_directory() + "/.venv/bin/python" }
-system_python := if os_family() == "windows" { "python" } else { "python3" }
+python := if os_family() == "windows" { "python" } else { "python3" }
 
 default:
     @just --list
-
-# Create .venv with the worker and its test tools (GPU libraries are detected; pass --gpu or --cpu to override).
-setup *flags:
-    {{system_python}} scripts/setup.py --dev {{flags}}
 
 # Build the program (pass --release for an optimized build).
 build *flags:
@@ -18,10 +13,9 @@ build *flags:
 run *args:
     cargo run -q -- {{args}}
 
-# Run every test: the Rust crates, the worker and the scripts.
+# Run every test: the Rust crates and the packaging scripts.
 test:
     cargo test --workspace
-    cd worker && {{python}} -m pytest -q
     {{python}} -m pytest -q scripts
 
 # Check formatting and lints.
@@ -29,7 +23,7 @@ lint:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
 
-# Show the detected OS, devices (CPU/GPU), FFmpeg and worker.
+# Show the detected OS, devices (CPU/GPU) and FFmpeg.
 check:
     cargo run -q -- devices
 
