@@ -36,6 +36,15 @@ pub enum Command {
     Transcribe(TranscribeArgs),
     /// Show the OS and which devices can run Whisper
     Devices,
+    /// Show whether the GPU can be used (downloads nothing unless --install)
+    Gpu {
+        /// Download the GPU libraries (asks first, shows the size)
+        #[arg(long)]
+        install: bool,
+        /// Do not ask before downloading (needs --install)
+        #[arg(long, requires = "install")]
+        yes: bool,
+    },
     /// Check that FFmpeg is installed and show how to get it if not
     Ffmpeg,
     /// Download a model for offline use
@@ -125,6 +134,9 @@ fn show_devices() -> ExitCode {
             let reason = option.reason.as_deref().unwrap_or("unavailable");
             println!("  [unavailable] {}: {reason}", option.label);
         }
+    }
+    if system.gpu().gpu_hint.is_some() {
+        println!("For GPU support, run `whispry gpu`.");
     }
     match find_ffmpeg() {
         Some(tool) => println!("FFmpeg: {}", tool.ffmpeg.display()),
@@ -226,6 +238,13 @@ pub fn run(cli: Cli) -> ExitCode {
         Some(Command::Tui { audio }) => open_tui(audio),
         Some(Command::Transcribe(args)) => transcribe(args),
         Some(Command::Devices) => show_devices(),
+        Some(Command::Gpu { install, yes }) => {
+            if install {
+                crate::gpu::install(yes)
+            } else {
+                crate::gpu::show_status()
+            }
+        }
         Some(Command::Ffmpeg) => check_ffmpeg(),
         Some(Command::Download { model }) => download(&model),
     }

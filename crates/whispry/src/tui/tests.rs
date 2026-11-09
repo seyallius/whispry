@@ -755,3 +755,22 @@ fn a_finished_job_no_longer_says_it_is_transcribing() {
     assert!(stage_line.contains("Done."), "{text}");
     assert!(!stage_line.contains("Transcribing"), "{text}");
 }
+
+#[test]
+fn a_system_without_a_gpu_never_hints_at_downloads() {
+    for os in [Os::Linux, Os::Windows, Os::MacOs] {
+        let option = cuda_option(os, Ok(0), &[], true);
+        let reason = option
+            .reason
+            .expect("the GPU is unavailable")
+            .to_lowercase();
+        assert!(!reason.contains("download"), "{reason}");
+        assert!(!reason.contains("cuda edition"), "{reason}");
+        assert_eq!(option.gpu_hint, None);
+    }
+    // And the setup screen shows that reason.
+    let app = App::new(Box::new(FakeServices::new(0)), None);
+    let text = screen(&app, 100, 30);
+    assert!(text.contains("No NVIDIA GPU found"));
+    assert!(!text.to_lowercase().contains("download gpu"));
+}
