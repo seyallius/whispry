@@ -8,11 +8,11 @@ use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use whispry_core::cancel::{CancelToken, JobCancelled};
 use whispry_core::config::{DeviceChoice, JobConfig, validate_config};
+use whispry_core::engine::EngineError;
 use whispry_core::events::{Event, Stage};
 use whispry_core::ffmpeg::FFmpeg;
 use whispry_core::platform::{Os, SystemInfo, cuda_option, detect_cpu};
 use whispry_core::transcriber::{JobError, JobSummary};
-use whispry_core::worker::WorkerError;
 
 use super::app::App;
 use super::services::{JobMessage, Services};
@@ -21,7 +21,6 @@ use super::setup::normalize_path;
 struct FakeServices {
     system: SystemInfo,
     downloaded: Vec<&'static str>,
-    worker: bool,
 }
 
 impl FakeServices {
@@ -31,10 +30,9 @@ impl FakeServices {
                 os: Os::Linux,
                 os_label: "Linux (test)".into(),
                 cpu_threads: 4,
-                devices: vec![cuda_option(Os::Linux, Ok(gpus), &[]), detect_cpu()],
+                devices: vec![cuda_option(Os::Linux, Ok(gpus), &[], true), detect_cpu()],
             },
             downloaded: vec!["small"],
-            worker: true,
         }
     }
 }
@@ -42,9 +40,6 @@ impl FakeServices {
 impl Services for FakeServices {
     fn system(&self) -> &SystemInfo {
         &self.system
-    }
-    fn worker_available(&self) -> bool {
-        self.worker
     }
     fn is_model_downloaded(&self, model: &str) -> bool {
         self.downloaded.contains(&model)
@@ -178,7 +173,7 @@ fn the_screen_shows_the_machine_and_every_choice() {
         "Small (downloaded)",
         "Auto-detect",
         "Auto  uses CPU",
-        "No NVIDIA GPU or driver found",
+        "No NVIDIA GPU found",
         "Start transcription",
     ] {
         assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
@@ -217,16 +212,6 @@ fn problems_are_listed_and_the_screen_stays() {
     ctrl(&mut app, 's');
     assert_eq!(jobs_started(), 0);
     assert!(screen(&app, 100, 30).contains("File not found"));
-}
-
-#[test]
-fn a_missing_worker_is_explained() {
-    let mut services = FakeServices::new(0);
-    services.worker = false;
-    let (mut app, _dir, _) = app_with_file(services);
-    ctrl(&mut app, 's');
-    assert_eq!(jobs_started(), 0);
-    assert!(screen(&app, 110, 32).contains("worker was not found"));
 }
 
 #[test]
@@ -496,7 +481,7 @@ fn escape_cancels_and_the_job_reports_where_it_stopped() {
 #[test]
 fn a_failure_offers_a_retry_on_the_cpu_that_reruns_the_same_job() {
     let (mut app, _dir) = running_app();
-    send(JobMessage::Done(Err(JobError::Worker(WorkerError::Load {
+    send(JobMessage::Done(Err(JobError::Engine(EngineError::Load {
         device: "cuda".into(),
         message: "out of memory".into(),
     }))));
@@ -527,8 +512,8 @@ fn a_failure_on_the_cpu_has_nothing_to_retry() {
     }
     press(&mut app, KeyCode::Right); // CPU
     ctrl(&mut app, 's');
-    send(JobMessage::Done(Err(JobError::Worker(
-        WorkerError::Exited("crashed".into()),
+    send(JobMessage::Done(Err(JobError::Engine(
+        EngineError::Transcribe("crashed".into()),
     ))));
     deliver(&mut app);
     assert!(!screen(&app, 100, 34).contains("Retry on CPU"));
@@ -716,8 +701,8 @@ fn the_close_button_works_with_tab_and_enter() {
 #[test]
 fn a_retry_on_the_cpu_also_checks_for_ffmpeg() {
     let (mut app, _dir) = running_app();
-    send(JobMessage::Done(Err(JobError::Worker(
-        WorkerError::Exited("x".into()),
+    send(JobMessage::Done(Err(JobError::Engine(
+        EngineError::Transcribe("x".into()),
     ))));
     deliver(&mut app);
     FFMPEG_INSTALLED.set(false);

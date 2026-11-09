@@ -197,9 +197,11 @@ impl RunState {
                 Err(TryRecvError::Disconnected) => {
                     if !self.status.is_over() {
                         self.finish(
-                            Err(JobError::Worker(whispry_core::worker::WorkerError::Exited(
-                                String::new(),
-                            ))),
+                            Err(JobError::Engine(
+                                whispry_core::engine::EngineError::Transcribe(
+                                    "the transcription stopped unexpectedly".to_string(),
+                                ),
+                            )),
                             now,
                         );
                     }

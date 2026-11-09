@@ -130,10 +130,6 @@ fn show_devices() -> ExitCode {
         Some(tool) => println!("FFmpeg: {}", tool.ffmpeg.display()),
         None => println!("FFmpeg: not found"),
     }
-    match &environment.worker {
-        Some(worker) => println!("Worker Python: {}", worker.program.display()),
-        None => println!("Worker Python: not found (run the setup script)"),
-    }
     ExitCode::SUCCESS
 }
 

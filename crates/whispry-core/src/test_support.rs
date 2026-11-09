@@ -26,11 +26,14 @@ pub fn write_sine_wav(path: &Path, seconds: u32, frequency: f64) {
     std::fs::write(path, bytes).unwrap();
 }
 
-use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use crate::worker::WorkerCommand;
+use crate::cancel::CancelToken;
+use crate::engine::{EngineError, EngineOpener, SpeechEngine, Update};
+use crate::platform::Device;
 
-/// Needs from the machine (FFmpeg, Python) that tests skip when missing.
+/// Needs from the machine (FFmpeg) that tests skip when missing.
 ///
 /// With `WHISPRY_TEST_STRICT=1`, as set in CI, a missing need fails the test
 /// instead, so a green run always means the tests really ran.
@@ -43,112 +46,132 @@ pub fn require<T>(what: &str, found: Option<T>) -> Option<T> {
     found
 }
 
-/// A Python that can run the worker (has numpy), if this machine has one.
-pub fn python() -> Option<PathBuf> {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let candidates = [
-        std::env::var_os("WHISPRY_PYTHON").map(PathBuf::from),
-        Some(repo.join(".venv/bin/python")),
-        Some(repo.join(".venv/Scripts/python.exe")),
-        Some(PathBuf::from("python3")),
-        Some(PathBuf::from("python")),
-    ];
-    candidates.into_iter().flatten().find(|python| {
-        crate::process::command(python)
-            .args(["-c", "import numpy"])
-            .output()
-            .is_ok_and(|output| output.status.success())
-    })
+/// What a fake engine was asked to do.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FakeCall {
+    Load {
+        device: String,
+        compute_type: String,
+    },
+    Transcribe {
+        samples: usize,
+        language: Option<String>,
+        beam_size: u32,
+    },
 }
 
-const FAKE_WORKER: &str = r#"
-import json, sys, time
-from types import SimpleNamespace
-
-sys.path.insert(0, sys.argv[1])
-from whispry_worker import server
-
-CALLS, LANGUAGE = sys.argv[2], sys.argv[3]
-RATE = 16000
-
-
-def record(entry):
-    with open(CALLS, "a") as file:
-        file.write(json.dumps(entry) + "\n")
-
-
-class FakeModel:
-    """One segment per 20 s of audio, 50 ms apart."""
-
-    def __init__(self):
-        self.count = 0
-
-    def transcribe(self, samples, **options):
-        self.count += 1
-        number = self.count
-        seconds = len(samples) / RATE
-        record({"samples": len(samples), **options})
-
-        def segments():
-            start = 0.0
-            while start + 1 < seconds:
-                time.sleep(0.05)
-                end = min(start + 20, seconds)
-                yield SimpleNamespace(start=start, end=end, text=f" window {number} at {start:.0f} ")
-                start = end
-
-        return segments(), SimpleNamespace(language=LANGUAGE, language_probability=0.9)
-
-
-def factory(model_dir, device, compute_type, cpu_threads):
-    record({"load": device, "compute_type": compute_type})
-    if device == "cuda":
-        raise RuntimeError("no GPU in the fake worker")
-    return FakeModel()
-
-
-server.serve(sys.stdin.buffer, sys.stdout.buffer, factory, lambda device: {"int8", "float32"})
-"#;
-
-/// The real worker server with a fake model, and the file it records calls in.
-pub struct FakeWorker {
-    pub command: WorkerCommand,
-    pub calls: PathBuf,
+/// A pure-Rust stand-in for the speech engine that records its calls.
+///
+/// It loads on the CPU with `int8` or `float32` only (the GPU never loads),
+/// and answers every call with one segment per 20 s of audio, 50 ms apart.
+#[derive(Clone)]
+pub struct FakeEngines {
+    language: String,
+    calls: Arc<Mutex<Vec<FakeCall>>>,
 }
 
-impl FakeWorker {
-    /// `None` when no suitable Python is installed (the test is skipped).
-    pub fn new(dir: &Path, language: &str) -> Option<FakeWorker> {
-        let python = require("Python with numpy", python())?;
-        let script = dir.join("fake_worker.py");
-        std::fs::write(&script, FAKE_WORKER).unwrap();
-        let calls = dir.join("calls.jsonl");
-        let worker_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../worker");
-        let command = WorkerCommand {
-            program: python,
-            args: vec![
-                script.into_os_string(),
-                worker_dir.into_os_string(),
-                calls.clone().into_os_string(),
-                language.into(),
-            ],
-        };
-        Some(FakeWorker { command, calls })
+impl FakeEngines {
+    pub fn new(language: &str) -> Self {
+        FakeEngines {
+            language: language.into(),
+            calls: Arc::default(),
+        }
     }
 
-    /// Everything the fake model was asked to do, in order.
-    pub fn calls(&self) -> Vec<serde_json::Value> {
-        std::fs::read_to_string(&self.calls)
-            .unwrap_or_default()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
+    pub fn opener(&self) -> EngineOpener {
+        let fake = self.clone();
+        Arc::new(move |_dir, device, compute_type, _threads| {
+            fake.calls.lock().unwrap().push(FakeCall::Load {
+                device: device.as_str().into(),
+                compute_type: compute_type.into(),
+            });
+            if device == Device::Cuda {
+                return Err(EngineError::Load {
+                    device: "cuda".into(),
+                    message: "no GPU in the fake engine".into(),
+                });
+            }
+            if !["int8", "float32"].contains(&compute_type) {
+                return Err(EngineError::Load {
+                    device: device.as_str().into(),
+                    message: format!("compute type {compute_type} is not supported"),
+                });
+            }
+            let engine: Box<dyn SpeechEngine + Send> = Box::new(FakeEngine {
+                fake: fake.clone(),
+                count: 0,
+            });
+            Ok(engine)
+        })
     }
 
-    pub fn transcriptions(&self) -> Vec<serde_json::Value> {
+    /// Everything the fake was asked to do, in order.
+    pub fn calls(&self) -> Vec<FakeCall> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    /// Loads as "device compute_type".
+    pub fn loads(&self) -> Vec<String> {
         self.calls()
             .into_iter()
-            .filter(|call| call.get("samples").is_some())
+            .filter_map(|call| match call {
+                FakeCall::Load {
+                    device,
+                    compute_type,
+                } => Some(format!("{device} {compute_type}")),
+                FakeCall::Transcribe { .. } => None,
+            })
             .collect()
+    }
+
+    pub fn transcriptions(&self) -> Vec<FakeCall> {
+        self.calls()
+            .into_iter()
+            .filter(|call| matches!(call, FakeCall::Transcribe { .. }))
+            .collect()
+    }
+}
+
+struct FakeEngine {
+    fake: FakeEngines,
+    count: usize,
+}
+
+impl SpeechEngine for FakeEngine {
+    fn transcribe(
+        &mut self,
+        samples: &[f32],
+        language: Option<&str>,
+        beam_size: u32,
+        on_update: &mut dyn FnMut(Update),
+        cancel: &CancelToken,
+    ) -> Result<bool, EngineError> {
+        self.count += 1;
+        self.fake.calls.lock().unwrap().push(FakeCall::Transcribe {
+            samples: samples.len(),
+            language: language.map(str::to_string),
+            beam_size,
+        });
+        on_update(Update::Language {
+            language: self.fake.language.clone(),
+            probability: 0.9,
+        });
+
+        let seconds = samples.len() as f64 / 16_000.0;
+        let mut start = 0.0;
+        while start + 1.0 < seconds {
+            std::thread::sleep(Duration::from_millis(50));
+            let end = f64::min(start + 20.0, seconds);
+            on_update(Update::Segment {
+                start,
+                end,
+                text: format!("window {} at {start:.0}", self.count),
+            });
+            if cancel.is_cancelled() {
+                return Ok(true);
+            }
+            start = end;
+        }
+        Ok(false)
     }
 }

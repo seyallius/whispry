@@ -1,8 +1,8 @@
 //! Detect the operating system and which compute devices can run Whisper.
 //!
-//! This is a quick check done with no Python: it asks `nvidia-smi` whether a
-//! GPU exists and looks for the CUDA libraries on disk. The transcription
-//! worker has the last word, because it actually loads the model.
+//! This is a quick check: it asks `nvidia-smi` whether a GPU exists, whether
+//! this build has GPU support and whether the CUDA libraries are on disk. The
+//! engine has the last word, because it actually loads the model.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -13,6 +13,9 @@ use crate::process::command;
 /// Best choice first. The first one the device supports becomes the default.
 pub const CUDA_COMPUTE_TYPES: &[&str] = &["int8_float16", "float16", "int8", "float32"];
 pub const CPU_COMPUTE_TYPES: &[&str] = &["int8", "int8_float32", "float32"];
+
+/// Whether this binary was built with GPU (CUDA) support: the GPU edition.
+pub const CUDA_BUILD: bool = cfg!(feature = "cuda");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Os {
@@ -41,12 +44,12 @@ impl Os {
         }
     }
 
-    /// Libraries CTranslate2 loads at runtime for CUDA. On Linux it only
-    /// needs cuBLAS; the Windows build also uses cuDNN.
+    /// Libraries CTranslate2 loads at runtime for CUDA. Only cuBLAS is needed;
+    /// cuDNN is not, because convolutions fall back to cuBLAS without it.
     pub fn cuda_libraries(self) -> &'static [&'static str] {
         match self {
             Os::Linux => &["libcublas.so.12"],
-            Os::Windows => &["cublas64_12.dll", "cudnn_ops64_9.dll", "cudnn_cnn64_9.dll"],
+            Os::Windows => &["cublas64_12.dll", "cublasLt64_12.dll"],
             Os::MacOs | Os::Other => &[],
         }
     }
@@ -67,6 +70,15 @@ impl Device {
     }
 }
 
+/// What would make an NVIDIA GPU that is present usable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GpuHint {
+    /// This is the CPU-only edition of Whispry.
+    NeedsCudaEdition,
+    /// This is the GPU edition, but these CUDA libraries were not found.
+    NeedsLibraries { missing: Vec<String> },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceOption {
     pub device: Device,
@@ -74,6 +86,8 @@ pub struct DeviceOption {
     pub available: bool,
     /// Why the device can't be used, when it can't.
     pub reason: Option<String>,
+    /// Set only when an NVIDIA GPU is present but cannot be used yet.
+    pub gpu_hint: Option<GpuHint>,
     pub compute_types: Vec<&'static str>,
 }
 
@@ -125,6 +139,7 @@ pub fn detect_cpu() -> DeviceOption {
         label: "CPU".into(),
         available: true,
         reason: None,
+        gpu_hint: None,
         compute_types: CPU_COMPUTE_TYPES.to_vec(),
     }
 }
@@ -149,7 +164,8 @@ fn query_gpu_count() -> Result<usize, String> {
 }
 
 /// Folders where pip-installed NVIDIA libraries live inside a Python
-/// environment (`lib` on Linux, `bin` on Windows).
+/// environment (`lib` on Linux, `bin` on Windows). Used to reuse CUDA
+/// libraries a user already has; Whispry itself needs no Python.
 pub fn nvidia_wheel_dirs(venv: &Path, os: Os) -> Vec<PathBuf> {
     let (site_packages, folder): (Vec<PathBuf>, &str) = match os {
         Os::Windows => (vec![venv.join("Lib").join("site-packages")], "bin"),
@@ -227,33 +243,49 @@ pub fn cuda_option(
     os: Os,
     gpus: Result<usize, String>,
     missing_libraries: &[&str],
+    cuda_build: bool,
 ) -> DeviceOption {
-    let unavailable = |reason: String| DeviceOption {
+    let unavailable = |reason: String, gpu_hint: Option<GpuHint>| DeviceOption {
         device: Device::Cuda,
         label: "NVIDIA GPU (CUDA)".into(),
         available: false,
         reason: Some(reason),
+        gpu_hint,
         compute_types: Vec::new(),
     };
 
     if os.cuda_libraries().is_empty() {
-        return unavailable(format!("CUDA is not supported on {}", os.name()));
+        return unavailable(format!("CUDA is not supported on {}", os.name()), None);
     }
 
-    let count = match gpus {
-        Ok(count) => count,
-        Err(_) => return unavailable("No NVIDIA GPU or driver found".into()),
-    };
+    let count = gpus.unwrap_or(0);
     if count == 0 {
-        return unavailable("No NVIDIA GPU or driver found".into());
+        return unavailable("No NVIDIA GPU found".into(), None);
+    }
+
+    if !cuda_build {
+        return unavailable(
+            "NVIDIA GPU found, but this is the CPU-only edition of Whispry. \
+             Run `whispry gpu` to set up GPU support."
+                .into(),
+            Some(GpuHint::NeedsCudaEdition),
+        );
     }
 
     if !missing_libraries.is_empty() {
-        return unavailable(format!(
-            "NVIDIA GPU found, but CUDA libraries are missing ({}). \
-             Run setup again with --gpu to install them.",
-            missing_libraries.join(", ")
-        ));
+        return unavailable(
+            format!(
+                "NVIDIA GPU found, but CUDA libraries are missing ({}). \
+                 Run `whispry gpu` to install them.",
+                missing_libraries.join(", ")
+            ),
+            Some(GpuHint::NeedsLibraries {
+                missing: missing_libraries
+                    .iter()
+                    .map(|name| name.to_string())
+                    .collect(),
+            }),
+        );
     }
 
     let label = if count == 1 {
@@ -266,12 +298,13 @@ pub fn cuda_option(
         label,
         available: true,
         reason: None,
+        gpu_hint: None,
         compute_types: CUDA_COMPUTE_TYPES.to_vec(),
     }
 }
 
 /// Look for a GPU and the CUDA libraries. `extra_library_dirs` are searched
-/// first, so pass the worker environment's NVIDIA wheel folders there.
+/// first, so pass the folders of downloaded CUDA libraries there.
 pub fn detect_cuda(os: Os, extra_library_dirs: &[PathBuf]) -> DeviceOption {
     let gpus = query_gpu_count();
     let missing = match gpus {
@@ -282,7 +315,7 @@ pub fn detect_cuda(os: Os, extra_library_dirs: &[PathBuf]) -> DeviceOption {
         }
         _ => Vec::new(),
     };
-    cuda_option(os, gpus, &missing)
+    cuda_option(os, gpus, &missing, CUDA_BUILD)
 }
 
 /// Inspect this machine.
@@ -350,11 +383,11 @@ mod tests {
     use super::*;
 
     fn gpu() -> DeviceOption {
-        cuda_option(Os::Linux, Ok(1), &[])
+        cuda_option(Os::Linux, Ok(1), &[], true)
     }
 
     fn no_gpu() -> DeviceOption {
-        cuda_option(Os::Linux, Ok(0), &[])
+        cuda_option(Os::Linux, Ok(0), &[], true)
     }
 
     fn system(gpu: DeviceOption) -> SystemInfo {
@@ -404,14 +437,43 @@ mod tests {
 
     #[test]
     fn gpu_with_missing_libraries_names_them() {
-        let option = cuda_option(Os::Windows, Ok(1), &["cudnn_ops64_9.dll"]);
+        let option = cuda_option(Os::Windows, Ok(1), &["cublasLt64_12.dll"], true);
         assert!(!option.available);
-        assert!(option.reason.unwrap().contains("cudnn_ops64_9.dll"));
+        let reason = option.reason.unwrap();
+        assert!(reason.contains("cublasLt64_12.dll"));
+        assert!(reason.contains("whispry gpu"));
+        assert_eq!(
+            option.gpu_hint,
+            Some(GpuHint::NeedsLibraries {
+                missing: vec!["cublasLt64_12.dll".into()]
+            })
+        );
+    }
+
+    #[test]
+    fn a_gpu_with_the_cpu_only_edition_points_to_the_gpu_command() {
+        let option = cuda_option(Os::Linux, Ok(1), &["libcublas.so.12"], false);
+        assert!(!option.available);
+        assert_eq!(option.gpu_hint, Some(GpuHint::NeedsCudaEdition));
+        assert!(option.reason.unwrap().contains("whispry gpu"));
+    }
+
+    #[test]
+    fn there_is_no_hint_without_an_nvidia_gpu_or_on_macos() {
+        for option in [
+            cuda_option(Os::Linux, Ok(0), &[], false),
+            cuda_option(Os::Linux, Err("no driver".into()), &[], true),
+            cuda_option(Os::MacOs, Ok(1), &[], true),
+        ] {
+            assert!(!option.available);
+            assert_eq!(option.gpu_hint, None);
+        }
+        assert_eq!(no_gpu().reason.as_deref(), Some("No NVIDIA GPU found"));
     }
 
     #[test]
     fn gpu_with_libraries_is_available_with_default_compute_type() {
-        let option = cuda_option(Os::Windows, Ok(2), &[]);
+        let option = cuda_option(Os::Windows, Ok(2), &[], true);
         assert!(option.available);
         assert_eq!(option.label, "NVIDIA GPU (CUDA, 2 devices)");
         assert_eq!(option.default_compute_type(), Some("int8_float16"));
@@ -419,13 +481,13 @@ mod tests {
 
     #[test]
     fn missing_driver_and_zero_gpus_look_the_same_to_the_user() {
-        let failed = cuda_option(Os::Linux, Err("not found".into()), &[]);
+        let failed = cuda_option(Os::Linux, Err("not found".into()), &[], true);
         assert_eq!(failed.reason, no_gpu().reason);
     }
 
     #[test]
     fn cuda_is_unsupported_on_macos() {
-        let option = cuda_option(Os::MacOs, Ok(1), &[]);
+        let option = cuda_option(Os::MacOs, Ok(1), &[], true);
         assert!(option.reason.unwrap().contains("not supported"));
     }
 
@@ -443,12 +505,13 @@ mod tests {
         let first = tempfile::tempdir().unwrap();
         let second = tempfile::tempdir().unwrap();
         std::fs::write(first.path().join("cublas64_12.dll"), "").unwrap();
-        std::fs::write(second.path().join("cudnn_ops64_9.dll"), "").unwrap();
         let dirs = vec![first.path().to_path_buf(), second.path().to_path_buf()];
         assert_eq!(
             missing_cuda_libraries(Os::Windows, &dirs),
-            vec!["cudnn_cnn64_9.dll"]
+            vec!["cublasLt64_12.dll"]
         );
+        std::fs::write(second.path().join("cublasLt64_12.dll"), "").unwrap();
+        assert!(missing_cuda_libraries(Os::Windows, &dirs).is_empty());
     }
 
     #[test]

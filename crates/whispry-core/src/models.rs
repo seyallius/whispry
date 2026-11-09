@@ -23,7 +23,15 @@ pub const MODEL_FILES: &[&str] = &[
     "preprocessor_config.json",
 ];
 
-pub const REQUIRED_FILES: &[&str] = &["config.json", "model.bin", "tokenizer.json"];
+/// Without these the engine cannot load the model: `config.json` and
+/// `model.bin` for CTranslate2, `tokenizer.json` and `preprocessor_config.json`
+/// for the Whisper wrapper. (The vocabulary file is fetched too.)
+pub const REQUIRED_FILES: &[&str] = &[
+    "config.json",
+    "model.bin",
+    "tokenizer.json",
+    "preprocessor_config.json",
+];
 
 const DEFAULT_ENDPOINT: &str = "https://huggingface.co";
 
@@ -457,6 +465,7 @@ mod tests {
             ("config.json", 20),
             ("model.bin", 3 << 20),
             ("tokenizer.json", 30),
+            ("preprocessor_config.json", 35),
             ("vocabulary.txt", 40),
             ("README.md", 50),
         ]
@@ -516,6 +525,7 @@ mod tests {
             [
                 "config.json",
                 "model.bin",
+                "preprocessor_config.json",
                 "tokenizer.json",
                 "vocabulary.txt"
             ]
@@ -537,7 +547,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        let total = (20 + 30 + 40 + (3 << 20)) as f64;
+        let total = (20 + 30 + 35 + 40 + (3 << 20)) as f64;
         assert_eq!(progress.first(), Some(&(0.0, Some(total))));
         assert_eq!(progress.last(), Some(&(total, Some(total))));
         assert!(

@@ -86,8 +86,7 @@ _Screenshots show demo content._
 - **Handles long recordings:** audio is processed a few minutes at a time,
   so a three-hour recording needs no more memory for audio than a
   three-minute one
-- **Cuts at pauses, not mid-word:** each chunk ends in a quiet moment, and
-  the end of the previous text is passed along for context
+- **Cuts at pauses, not mid-word:** each chunk ends in a quiet moment
 - **Persian and English**, or let Whispry detect the language
 - **Small and Medium models**, downloaded once and then used offline
 - **Terminal UI for people, command line for scripts**, both powered by the
@@ -197,8 +196,8 @@ transcription works offline.
 3. Stream the decoded audio from FFmpeg in small blocks.
 4. Group blocks into windows of about 10 minutes, ending each window in the
    longest pause near its end, so no word is cut in half.
-5. Send each window to the worker. The language is detected once and then
-   kept, and each window gets the end of the previous one as context.
+5. Send each window to the speech engine in pieces of at most 30 seconds,
+   cut at pauses. The language is detected once and then kept.
 6. Write each timestamped line to the output file as soon as it is ready.
 
 The code is split into three parts:

@@ -23,8 +23,6 @@ pub enum JobMessage {
 
 pub trait Services {
     fn system(&self) -> &SystemInfo;
-    /// Whether the worker's Python environment was found.
-    fn worker_available(&self) -> bool;
     fn is_model_downloaded(&self, model: &str) -> bool;
     fn validate(&self, config: &JobConfig) -> Vec<String>;
     fn find_ffmpeg(&self) -> Option<FFmpeg>;
@@ -49,10 +47,6 @@ impl RealServices {
 impl Services for RealServices {
     fn system(&self) -> &SystemInfo {
         &self.environment.system
-    }
-
-    fn worker_available(&self) -> bool {
-        self.environment.worker.is_some()
     }
 
     fn is_model_downloaded(&self, model: &str) -> bool {

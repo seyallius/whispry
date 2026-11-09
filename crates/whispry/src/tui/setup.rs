@@ -215,13 +215,6 @@ impl SetupState {
         } else {
             problems.extend(services.validate(&config));
         }
-        if !services.worker_available() {
-            problems.push(
-                "The transcription worker was not found. Run the setup script, \
-                 or set WHISPRY_PYTHON."
-                    .to_string(),
-            );
-        }
         if problems.is_empty() {
             Ok(config)
         } else {
