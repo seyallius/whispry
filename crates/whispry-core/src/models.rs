@@ -24,14 +24,42 @@ pub const MODEL_FILES: &[&str] = &[
 ];
 
 /// Without these the engine cannot load the model: `config.json` and
-/// `model.bin` for CTranslate2, `tokenizer.json` and `preprocessor_config.json`
-/// for the Whisper wrapper. (The vocabulary file is fetched too.)
-pub const REQUIRED_FILES: &[&str] = &[
-    "config.json",
-    "model.bin",
-    "tokenizer.json",
-    "preprocessor_config.json",
-];
+/// `model.bin` for CTranslate2 and `tokenizer.json` for the Whisper wrapper.
+/// (The vocabulary file is fetched too. `preprocessor_config.json` is fetched
+/// when the repository has it; the faster-whisper conversions do not, so it is
+/// written locally when missing, see [`ensure_preprocessor_config`].)
+pub const REQUIRED_FILES: &[&str] = &["config.json", "model.bin", "tokenizer.json"];
+
+const PREPROCESSOR_CONFIG: &str = "preprocessor_config.json";
+
+/// The audio settings every Whisper model of the sizes Whispry offers
+/// (small and medium) shares: 16 kHz audio in 30 second windows and 80 mel
+/// bands. The engine computes the mel filters itself.
+const DEFAULT_PREPROCESSOR_CONFIG: &str = r#"{
+  "chunk_length": 30,
+  "feature_extractor_type": "WhisperFeatureExtractor",
+  "feature_size": 80,
+  "hop_length": 160,
+  "n_fft": 400,
+  "n_samples": 480000,
+  "nb_max_frames": 3000,
+  "padding_side": "right",
+  "padding_value": 0.0,
+  "processor_class": "WhisperProcessor",
+  "return_attention_mask": false,
+  "sampling_rate": 16000
+}
+"#;
+
+/// Make sure the model folder has the audio settings file the engine reads,
+/// writing the standard Whisper settings when the download did not include it.
+pub fn ensure_preprocessor_config(model_dir: &Path) -> std::io::Result<()> {
+    let path = model_dir.join(PREPROCESSOR_CONFIG);
+    if path.is_file() {
+        return Ok(());
+    }
+    std::fs::write(path, DEFAULT_PREPROCESSOR_CONFIG)
+}
 
 const DEFAULT_ENDPOINT: &str = "https://huggingface.co";
 
@@ -289,6 +317,7 @@ fn ensure_model_from(
             "Using cached model: {}",
             cached.display()
         )));
+        ensure_preprocessor_config(&cached)?;
         return Ok(cached);
     }
 
@@ -307,6 +336,7 @@ fn ensure_model_from(
         on_event,
         cancel,
     )?;
+    ensure_preprocessor_config(&destination)?;
     Ok(destination)
 }
 
@@ -325,6 +355,24 @@ mod tests {
         for file in REQUIRED_FILES {
             std::fs::write(target.join(file), "x").unwrap();
         }
+    }
+
+    #[test]
+    fn missing_audio_settings_are_written_and_existing_ones_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        ensure_preprocessor_config(dir.path()).unwrap();
+        let written = std::fs::read_to_string(dir.path().join(PREPROCESSOR_CONFIG)).unwrap();
+        let settings: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(settings["sampling_rate"], 16000);
+        assert_eq!(settings["feature_size"], 80);
+        assert_eq!(settings["n_samples"], 480_000);
+
+        std::fs::write(dir.path().join(PREPROCESSOR_CONFIG), "{}").unwrap();
+        ensure_preprocessor_config(dir.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(PREPROCESSOR_CONFIG)).unwrap(),
+            "{}"
+        );
     }
 
     #[test]
