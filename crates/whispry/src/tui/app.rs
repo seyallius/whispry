@@ -5,7 +5,7 @@ use std::sync::mpsc::channel;
 use std::time::Instant;
 
 use ratatui::Frame;
-use ratatui::crossterm::event::KeyEvent;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use whispry_core::cancel::CancelToken;
 use whispry_core::config::JobConfig;
 
@@ -13,7 +13,8 @@ use super::ffmpeg_dialog::{DialogAction, FFmpegDialog};
 use super::file_picker::{PickerAction, PickerState};
 use super::run::{RunAction, RunState};
 use super::services::Services;
-use super::setup::{SetupAction, SetupState};
+use super::setup::{Field, SetupAction, SetupState};
+use super::theme::{self, Hit};
 
 pub struct App {
     services: Box<dyn Services>,
@@ -87,23 +88,13 @@ impl App {
             return;
         }
         if let Some(run) = &mut self.run {
-            match run.handle_key(&key) {
-                RunAction::None => {}
-                RunAction::New => self.run = None,
-                RunAction::Quit => self.quit = true,
-                RunAction::Retry(config) => self.start_or_ask_for_ffmpeg(config),
-            }
+            let action = run.handle_key(&key);
+            self.apply_run(action);
             return;
         }
         if let Some(picker) = &mut self.picker {
-            match picker.handle_key(&key) {
-                PickerAction::None => {}
-                PickerAction::Cancel => self.picker = None,
-                PickerAction::Choose(path) => {
-                    self.setup.choose_file(&path);
-                    self.picker = None;
-                }
-            }
+            let action = picker.handle_key(&key);
+            self.apply_picker(action);
             return;
         }
         match self.setup.handle_key(&key, self.services.as_ref()) {
@@ -116,6 +107,87 @@ impl App {
         }
     }
 
+    fn apply_run(&mut self, action: RunAction) {
+        match action {
+            RunAction::None => {}
+            RunAction::New => self.run = None,
+            RunAction::Quit => self.quit = true,
+            RunAction::Retry(config) => self.start_or_ask_for_ffmpeg(config),
+        }
+    }
+
+    fn apply_picker(&mut self, action: PickerAction) {
+        match action {
+            PickerAction::None => {}
+            PickerAction::Cancel => self.picker = None,
+            PickerAction::Choose(path) => {
+                self.setup.choose_file(&path);
+                self.picker = None;
+            }
+        }
+    }
+
+    /// A left click does what the keyboard would: focus the thing, then press it.
+    pub fn on_mouse(&mut self, mouse: MouseEvent) {
+        theme::set_mouse(mouse.column, mouse.row);
+        let wheel: isize = match mouse.kind {
+            MouseEventKind::ScrollUp => -3,
+            MouseEventKind::ScrollDown => 3,
+            MouseEventKind::Down(MouseButton::Left) => 0,
+            _ => return,
+        };
+        if wheel != 0 {
+            if let Some(picker) = &mut self.picker {
+                picker.scroll(wheel);
+            }
+            return;
+        }
+        let Some(hit) = theme::at(mouse.column, mouse.row) else {
+            return;
+        };
+        let enter = KeyEvent::from(KeyCode::Enter);
+        match hit {
+            Hit::Nothing => {}
+            Hit::Dialog(index) => {
+                if let Some(dialog) = &mut self.ffmpeg_dialog {
+                    dialog.focus_on(index);
+                    self.on_key(enter);
+                }
+            }
+            Hit::Run(button) => {
+                if let Some(run) = &mut self.run {
+                    let action = run.press(button);
+                    self.apply_run(action);
+                }
+            }
+            Hit::PickerRow(index) => {
+                if let Some(picker) = &mut self.picker {
+                    let action = picker.click(index);
+                    self.apply_picker(action);
+                }
+            }
+            Hit::PickerOutside => self.picker = None,
+            Hit::Browse => {
+                self.picker = Some(PickerState::open(&self.setup.browse_start()));
+            }
+            Hit::Device(index) => self.setup.pick_device(index, self.services.as_ref()),
+            Hit::Arrow(field, forward) => {
+                self.setup.focus_on(field);
+                self.on_key(KeyEvent::from(if forward {
+                    KeyCode::Right
+                } else {
+                    KeyCode::Left
+                }));
+            }
+            Hit::Setup(field) => {
+                self.setup.focus_on(field);
+                if matches!(field, Field::Start | Field::Advanced) {
+                    self.on_key(enter);
+                }
+            }
+        }
+    }
+
     pub fn on_paste(&mut self, text: &str) {
         if self.run.is_none() && self.picker.is_none() && self.ffmpeg_dialog.is_none() {
             self.setup.handle_paste(text);
@@ -123,6 +195,7 @@ impl App {
     }
 
     pub fn render(&self, frame: &mut Frame) {
+        theme::clear_hits();
         let area = frame.area();
         if let Some(run) = &self.run {
             run.render(frame, area, Instant::now());

@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Gauge, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 use whispry_core::cancel::CancelToken;
 use whispry_core::config::{DeviceChoice, JobConfig};
 use whispry_core::events::{Event, Stage};
@@ -17,11 +17,8 @@ use whispry_core::timestamps::format_timestamp;
 use whispry_core::transcriber::{JobError, JobSummary};
 
 use super::services::JobMessage;
+use super::theme::{self, Hit};
 
-const ACCENT: Color = Color::Cyan;
-const DIM: Color = Color::DarkGray;
-const OK: Color = Color::Green;
-const ERROR: Color = Color::Red;
 const ACTIVITY_LINES: usize = 5;
 /// Messages handled per redraw, so a burst never freezes the screen.
 const MESSAGES_PER_TICK: usize = 500;
@@ -317,7 +314,7 @@ impl RunState {
         }
     }
 
-    fn press(&mut self, button: Button) -> RunAction {
+    pub fn press(&mut self, button: Button) -> RunAction {
         match button {
             Button::Cancel => {
                 self.request_cancel();
@@ -479,23 +476,27 @@ impl RunState {
         .areas(area);
 
         let (title, color) = match &self.status {
-            RunStatus::Running => ("Transcribing", ACCENT),
-            RunStatus::Cancelling => ("Cancelling", Color::Yellow),
-            RunStatus::Finished { .. } => ("Finished", OK),
-            RunStatus::Cancelled { .. } => ("Cancelled", Color::Yellow),
-            RunStatus::Failed { .. } => ("Failed", ERROR),
+            RunStatus::Running => ("Transcribing", theme::accent()),
+            RunStatus::Cancelling => ("Cancelling", theme::warn()),
+            RunStatus::Finished { .. } => ("Finished", theme::ok()),
+            RunStatus::Cancelled { .. } => ("Cancelled", theme::warn()),
+            RunStatus::Failed { .. } => ("Failed", theme::error()),
         };
+        let ms = now.saturating_duration_since(self.started).as_millis();
+        let mut title_line = theme::gradient_text("Whispry");
+        title_line.push(Span::raw("  "));
+        title_line.push(Span::styled(
+            title,
+            Style::new().fg(color).add_modifier(Modifier::BOLD),
+        ));
+        if self.status == RunStatus::Running {
+            title_line.push(Span::raw("  "));
+            title_line.extend(theme::equalizer(ms, 10));
+        }
         frame.render_widget(
             Paragraph::new(vec![
-                Line::from(vec![
-                    Span::styled(
-                        "Whispry",
-                        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw("  "),
-                    Span::styled(title, Style::new().fg(color).add_modifier(Modifier::BOLD)),
-                ]),
-                Line::from(Span::styled(self.summary_line(), Style::new().fg(DIM))),
+                Line::from(title_line),
+                Line::from(Span::styled(self.summary_line(), theme::dim_style())),
             ]),
             header,
         );
@@ -516,36 +517,39 @@ impl RunState {
 
     fn render_progress(&self, frame: &mut Frame, area: Rect, now: Instant) {
         let block = Block::bordered()
-            .border_style(Style::new().fg(DIM))
+            .border_type(theme::BORDER)
+            .border_style(theme::dim_style())
             .title(" Progress ");
         let inner = block.inner(area);
         frame.render_widget(block, area);
         let [stage, bar, timing] = Layout::vertical([Constraint::Length(1); 3]).areas(inner);
+        let ms = now.saturating_duration_since(self.started).as_millis();
         let stage_text = match &self.status {
             RunStatus::Finished { .. } => "Done.".to_string(),
             RunStatus::Cancelled { .. } => "Stopped.".to_string(),
             RunStatus::Failed { .. } => "Stopped by an error.".to_string(),
-            RunStatus::Running | RunStatus::Cancelling => self.stage_message.clone(),
+            RunStatus::Running | RunStatus::Cancelling => {
+                format!("{} {}", theme::spinner(ms), self.stage_message)
+            }
         };
         frame.render_widget(Paragraph::new(stage_text), stage);
 
         let ratio = self.ratio();
         let finished = matches!(self.status, RunStatus::Finished { .. });
-        let gauge = Gauge::default()
-            .gauge_style(
-                Style::new()
-                    .fg(if finished { OK } else { ACCENT })
-                    .bg(Color::Indexed(237)),
-            )
-            .ratio(if finished { 1.0 } else { ratio.unwrap_or(0.0) })
-            .label(match ratio {
-                _ if finished => "100%".to_string(),
-                Some(ratio) => format!("{:.0}%", ratio * 100.0),
-                None => "…".to_string(),
-            });
-        frame.render_widget(gauge, bar);
+        let label = match ratio {
+            _ if finished => "100%".to_string(),
+            Some(ratio) => format!("{:.0}%", ratio * 100.0),
+            None => "…".to_string(),
+        };
+        let width = (bar.width as usize).saturating_sub(label.chars().count() + 2);
+        let mut spans = theme::progress_bar(width, ratio, finished, ms);
+        spans.push(Span::styled(
+            format!("  {label}"),
+            Style::new().add_modifier(Modifier::BOLD),
+        ));
+        frame.render_widget(Paragraph::new(Line::from(spans)), bar);
         frame.render_widget(
-            Paragraph::new(Span::styled(self.timing_line(now), Style::new().fg(DIM))),
+            Paragraph::new(Span::styled(self.timing_line(now), theme::dim_style())),
             timing,
         );
     }
@@ -561,7 +565,8 @@ impl RunState {
         is_transcript: bool,
     ) {
         let block = Block::bordered()
-            .border_style(Style::new().fg(DIM))
+            .border_type(theme::BORDER)
+            .border_style(theme::dim_style())
             .title(title.to_string());
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -575,7 +580,7 @@ impl RunState {
         let style = if is_transcript {
             Style::new()
         } else {
-            Style::new().fg(DIM)
+            theme::dim_style()
         };
         let shown: Vec<Line> = shown_lines[skip..]
             .iter()
@@ -595,7 +600,7 @@ impl RunState {
                     format_timestamp(*audio_duration),
                     output.display()
                 ),
-                OK,
+                theme::ok(),
             ),
             RunStatus::Cancelled {
                 output: Some(output),
@@ -604,13 +609,13 @@ impl RunState {
                     "Stopped. Text transcribed so far is saved in\n{}",
                     output.display()
                 ),
-                Color::Yellow,
+                theme::warn(),
             ),
             RunStatus::Cancelled { output: None } => (
                 "Stopped before any text was written.".to_string(),
-                Color::Yellow,
+                theme::warn(),
             ),
-            RunStatus::Failed { message } => (message.clone(), ERROR),
+            RunStatus::Failed { message } => (message.clone(), theme::error()),
             _ => return,
         };
         let lines: Vec<String> = text
@@ -620,7 +625,11 @@ impl RunState {
         frame.render_widget(
             Paragraph::new(lines.join("\n"))
                 .style(Style::new().fg(color))
-                .block(Block::bordered().border_style(Style::new().fg(color))),
+                .block(
+                    Block::bordered()
+                        .border_type(theme::BORDER)
+                        .border_style(Style::new().fg(color)),
+                ),
             area,
         );
     }
@@ -629,30 +638,28 @@ impl RunState {
         let buttons = self.buttons();
         if buttons.is_empty() {
             frame.render_widget(
-                Paragraph::new(Span::styled(" Stopping, one moment…", Style::new().fg(DIM))),
+                Paragraph::new(Span::styled(" Stopping, one moment…", theme::dim_style())),
                 area,
             );
             return;
         }
-        let mut spans = Vec::new();
-        for (index, button) in buttons.iter().enumerate() {
-            let style = if index == self.focus {
-                Style::new()
-                    .fg(Color::Black)
-                    .bg(ACCENT)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::new().fg(ACCENT)
-            };
-            spans.push(Span::styled(format!(" {} ", button.label()), style));
-            spans.push(Span::raw("  "));
-        }
+        let items: Vec<(&str, Hit, bool)> = buttons
+            .iter()
+            .enumerate()
+            .map(|(index, button)| (button.label(), Hit::Run(*button), index == self.focus))
+            .collect();
+        let used = theme::buttons(frame, area.x, area.y, &items);
         if self.status == RunStatus::Running {
-            spans.push(Span::styled(
-                "Esc cancels · Ctrl+Q cancels and quits",
-                Style::new().fg(DIM),
-            ));
+            let x = area.x + used + 2;
+            if x < area.right() {
+                frame.render_widget(
+                    Paragraph::new(Span::styled(
+                        "Esc cancels · Ctrl+Q cancels and quits",
+                        theme::dim_style(),
+                    )),
+                    Rect::new(x, area.y, area.right() - x, 1),
+                );
+            }
         }
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
     }
 }

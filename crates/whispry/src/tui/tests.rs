@@ -774,3 +774,90 @@ fn a_system_without_a_gpu_never_hints_at_downloads() {
     assert!(text.contains("No NVIDIA GPU found"));
     assert!(!text.to_lowercase().contains("download gpu"));
 }
+
+// ----- mouse -----
+
+use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+use super::theme::{Hit, rect_of};
+
+/// Click the middle of whatever `hit` was last drawn as.
+fn click(app: &mut App, hit: Hit) {
+    let rect = rect_of(hit).unwrap_or_else(|| panic!("{hit:?} is not on screen"));
+    app.on_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.x + rect.width / 2,
+        row: rect.y + rect.height / 2,
+        modifiers: KeyModifiers::NONE,
+    });
+}
+
+#[test]
+fn clicking_start_begins_the_job() {
+    let (mut app, _dir, _audio) = app_with_file(FakeServices::new(0));
+    FFMPEG_INSTALLED.set(true);
+    let before = jobs_started();
+    screen(&app, 100, 34);
+    click(&mut app, Hit::Setup(super::setup::Field::Start));
+    assert_eq!(jobs_started(), before + 1);
+    assert!(screen(&app, 100, 34).contains("Transcribing"));
+}
+
+#[test]
+fn clicking_an_arrow_changes_the_choice() {
+    let mut app = App::new(Box::new(FakeServices::new(0)), None);
+    screen(&app, 100, 34);
+    click(&mut app, Hit::Arrow(super::setup::Field::Model, true));
+    let text = screen(&app, 100, 34);
+    assert!(!text.contains("Small (downloaded)"), "{text}");
+}
+
+#[test]
+fn clicking_the_picker_selects_then_opens_and_outside_closes() {
+    let (mut app, dir, audio) = app_with_file(FakeServices::new(0));
+    screen(&app, 100, 34);
+    click(&mut app, Hit::Browse);
+    let text = screen(&app, 100, 34);
+    assert!(
+        text.contains("Choose a file") && text.contains("talk.mp3"),
+        "{text}"
+    );
+    let row = (0..9)
+        .map(Hit::PickerRow)
+        .find(|hit| {
+            rect_of(*hit).is_some() && {
+                let r = rect_of(*hit).unwrap();
+                text.lines()
+                    .nth(r.y as usize)
+                    .is_some_and(|l| l.contains("talk.mp3"))
+            }
+        })
+        .expect("the file is listed");
+    // The file starts highlighted, so one click opens it.
+    click(&mut app, row);
+    let text = screen(&app, 100, 34);
+    assert!(!text.contains("Choose a file"), "{text}");
+    assert!(text.contains(&audio.display().to_string()) || text.contains("talk.mp3"));
+
+    click(&mut app, Hit::Browse);
+    screen(&app, 100, 34);
+    app.on_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 0,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert!(!screen(&app, 100, 34).contains("Choose a file"));
+    drop(dir);
+}
+
+#[test]
+fn clicking_a_run_button_works() {
+    let (mut app, dir) = running_app();
+    send(JobMessage::Done(Ok(summary(&dir.path().join("talk.txt")))));
+    deliver(&mut app);
+    screen(&app, 100, 34);
+    click(&mut app, Hit::Run(super::run::Button::New));
+    let text = screen(&app, 100, 34);
+    assert!(text.contains("Start transcription"), "{text}");
+}

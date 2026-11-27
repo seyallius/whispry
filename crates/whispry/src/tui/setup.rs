@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Position, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 use whispry_core::config::{
@@ -14,11 +14,7 @@ use whispry_core::config::{
 
 use super::input::TextInput;
 use super::services::Services;
-
-const ACCENT: Color = Color::Cyan;
-const DIM: Color = Color::DarkGray;
-const ERROR: Color = Color::Red;
-const OK: Color = Color::Green;
+use super::theme::{self, Hit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
@@ -340,11 +336,34 @@ impl SetupState {
         }
     }
 
+    // ----- mouse -----
+
+    /// Give a clicked field focus.
+    pub fn focus_on(&mut self, field: Field) {
+        if self.fields().contains(&field) {
+            self.focus = field;
+        }
+    }
+
+    /// Choose a clicked device, if it can be used.
+    pub fn pick_device(&mut self, index: usize, services: &dyn Services) {
+        self.focus = Field::Device;
+        if self
+            .device_rows(services)
+            .get(index)
+            .is_some_and(|r| r.enabled)
+            && index != self.device
+        {
+            self.device = index;
+            self.compute = 0;
+        }
+    }
+
     // ----- drawing -----
 
     fn field_block(&self, field: Field, title: &str) -> Block<'static> {
         let focused = self.focus == field;
-        let style = Style::new().fg(if focused { ACCENT } else { DIM });
+        let style = theme::focus_style(focused);
         let title = Span::styled(
             format!(" {title} "),
             if focused {
@@ -353,19 +372,63 @@ impl SetupState {
                 style
             },
         );
-        Block::bordered().border_style(style).title(title)
+        Block::bordered()
+            .border_type(theme::BORDER)
+            .border_style(style)
+            .title(title)
     }
 
-    fn select_line(&self, field: Field, text: String) -> Line<'static> {
-        if self.focus == field {
-            Line::from(vec![
-                Span::styled("◀ ", Style::new().fg(ACCENT)),
-                Span::styled(text, Style::new().add_modifier(Modifier::BOLD)),
-                Span::styled(" ▶", Style::new().fg(ACCENT)),
-            ])
+    /// A boxed choice with a ◀ and ▶ you can press.
+    fn render_select(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        field: Field,
+        title: &str,
+        text: String,
+    ) {
+        let block = self.field_block(field, title);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        theme::add(area, Hit::Setup(field));
+        let arrow = Style::new().fg(if self.focus == field {
+            theme::accent()
         } else {
-            Line::from(format!("  {text}"))
-        }
+            theme::dim()
+        });
+        let hot = |rect: Rect| {
+            if theme::hovered(rect) {
+                Style::new()
+                    .fg(theme::accent2())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                arrow
+            }
+        };
+        let left = Rect::new(inner.x, inner.y, 3.min(inner.width), 1);
+        let right = Rect::new(
+            inner.right().saturating_sub(3),
+            inner.y,
+            3.min(inner.width),
+            1,
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled("◀", hot(left))),
+            Rect::new(left.x + 1, left.y, 1, 1),
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled("▶", hot(right))),
+            Rect::new(right.x + 1, right.y, 1, 1),
+        );
+        theme::add(left, Hit::Arrow(field, false));
+        theme::add(right, Hit::Arrow(field, true));
+        let mid = Rect::new(inner.x + 3, inner.y, inner.width.saturating_sub(6), 1);
+        let style = if self.focus == field {
+            Style::new().add_modifier(Modifier::BOLD)
+        } else {
+            Style::new()
+        };
+        frame.render_widget(Paragraph::new(Span::styled(text, style)), mid);
     }
 
     fn model_text(&self, services: &dyn Services) -> String {
@@ -408,21 +471,30 @@ impl SetupState {
         let block = self.field_block(field, title);
         let inner = block.inner(area);
         frame.render_widget(block, area);
+        theme::add(area, Hit::Setup(field));
         let hint_width = hint.chars().count() as u16;
         let room = (inner.width.saturating_sub(hint_width + 1)) as usize;
         let (shown, cursor) = input.window(room);
         let mut spans = vec![Span::raw(shown)];
         if input.text().is_empty() && self.focus != field {
-            spans = vec![Span::styled("(none)", Style::new().fg(DIM))];
+            spans = vec![Span::styled("(none)", theme::dim_style())];
         }
         frame.render_widget(Paragraph::new(Line::from(spans)), inner);
         if !hint.is_empty() {
             let x = inner.right().saturating_sub(hint_width);
             let hint_area = Rect::new(x, inner.y, hint_width.min(inner.width), 1);
+            let style = if theme::hovered(hint_area) {
+                Style::new()
+                    .fg(theme::accent2())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::new().fg(theme::accent())
+            };
             frame.render_widget(
-                Paragraph::new(Span::styled(hint.to_string(), Style::new().fg(DIM))),
+                Paragraph::new(Span::styled(hint.to_string(), style)),
                 hint_area,
             );
+            theme::add(hint_area, Hit::Browse);
         }
         if self.focus == field {
             frame.set_cursor_position(Position::new(inner.x + cursor as u16, inner.y));
@@ -453,7 +525,7 @@ impl SetupState {
             errors,
             footer,
         ] = Layout::vertical([
-            Constraint::Length(3),
+            Constraint::Length(5),
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(5),
@@ -486,29 +558,39 @@ impl SetupState {
                 self.language_text(),
             ),
         ] {
-            let block = self.field_block(field, title);
-            let inner = block.inner(area);
-            frame.render_widget(block, area);
-            frame.render_widget(Paragraph::new(self.select_line(field, text)), inner);
+            self.render_select(frame, area, field, title, text);
         }
 
         self.render_devices(frame, device, services);
         self.render_advanced(frame, advanced, services);
 
-        let start_style = if self.focus == Field::Start {
-            Style::new()
-                .fg(Color::Black)
-                .bg(ACCENT)
-                .add_modifier(Modifier::BOLD)
+        let focused = self.focus == Field::Start;
+        let width = 30.min(start.width);
+        let button = Rect::new(start.x + (start.width - width) / 2, start.y, width, 3);
+        let hot = focused || theme::hovered(button);
+        let color = if hot {
+            theme::accent2()
         } else {
-            Style::new().fg(ACCENT)
+            theme::accent()
         };
+        let mut style = Style::new().fg(color).add_modifier(Modifier::BOLD);
+        if focused {
+            style = style.fg(theme::ink()).bg(theme::accent());
+        } else if hot {
+            style = style.fg(theme::ink()).bg(theme::accent2());
+        }
         frame.render_widget(
-            Paragraph::new(Span::styled("  Start transcription  ", start_style))
+            Paragraph::new("▶  Start transcription")
                 .centered()
-                .block(Block::new()),
-            Rect::new(start.x, start.y + 1, start.width, 1),
+                .style(style)
+                .block(
+                    Block::bordered()
+                        .border_type(theme::BORDER)
+                        .border_style(Style::new().fg(color).bg(style.bg.unwrap_or_default())),
+                ),
+            button,
         );
+        theme::add(button, Hit::Setup(Field::Start));
 
         if !self.errors.is_empty() {
             let lines: Vec<Line> = self
@@ -517,18 +599,22 @@ impl SetupState {
                 .map(|e| Line::from(format!("• {e}")))
                 .collect();
             frame.render_widget(
-                Paragraph::new(lines).style(Style::new().fg(ERROR)).block(
-                    Block::bordered()
-                        .border_style(Style::new().fg(ERROR))
-                        .title(" Please fix "),
-                ),
+                Paragraph::new(lines)
+                    .style(Style::new().fg(theme::error()))
+                    .block(
+                        Block::bordered()
+                            .border_type(theme::BORDER)
+                            .border_style(Style::new().fg(theme::error()))
+                            .title(" Please fix "),
+                    ),
                 errors,
             );
         }
 
-        let hints = " Tab move · ←/→ change · Ctrl+O browse · Ctrl+S start · Ctrl+Q quit";
+        let hints =
+            " Tab move · ←/→ change · Ctrl+O browse · Ctrl+S start · Ctrl+Q quit · mouse works too";
         frame.render_widget(
-            Paragraph::new(Span::styled(hints, Style::new().fg(DIM))),
+            Paragraph::new(Span::styled(hints, theme::dim_style())),
             footer,
         );
     }
@@ -540,64 +626,83 @@ impl SetupState {
         } else {
             "no GPU"
         };
-        let title = Line::from(vec![
-            Span::styled(
-                "Whispry",
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  Private, local speech-to-text"),
-        ]);
+        let [logo_area, info_area] =
+            Layout::vertical([Constraint::Length(3), Constraint::Length(2)]).areas(area);
+        if area.width >= theme::LOGO_WIDTH {
+            frame.render_widget(Paragraph::new(theme::logo()), logo_area);
+        } else {
+            frame.render_widget(
+                Paragraph::new(Line::from(theme::gradient_text("Whispry"))),
+                logo_area,
+            );
+        }
         let info = Line::from(Span::styled(
             format!(
                 "{} · {} CPU threads · {gpu}",
                 system.os_label, system.cpu_threads
             ),
-            Style::new().fg(DIM),
+            theme::dim_style(),
         ));
-        frame.render_widget(Paragraph::new(vec![title, info]), area);
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from("Whispry · private, local speech-to-text"),
+                info,
+            ]),
+            info_area,
+        );
     }
 
     fn render_devices(&self, frame: &mut Frame, area: Rect, services: &dyn Services) {
         let block = self.field_block(Field::Device, "Device");
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        let lines: Vec<Line> = self
-            .device_rows(services)
-            .into_iter()
-            .enumerate()
-            .map(|(index, row)| {
-                let selected = index == self.device;
-                let marker = if selected { "(●)" } else { "( )" };
-                let style = if !row.enabled {
-                    Style::new().fg(DIM)
-                } else if selected {
-                    Style::new().fg(OK).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::new()
-                };
-                let mut spans = vec![Span::styled(format!("{marker} {}", row.label), style)];
-                if let Some(note) = row.note {
-                    spans.push(Span::styled(format!("  {note}"), Style::new().fg(DIM)));
-                }
-                Line::from(spans)
-            })
-            .collect();
-        frame.render_widget(Paragraph::new(lines), inner);
+        for (index, row) in self.device_rows(services).into_iter().enumerate() {
+            let y = inner.y + index as u16;
+            if y >= inner.bottom() {
+                break;
+            }
+            let rect = Rect::new(inner.x, y, inner.width, 1);
+            let selected = index == self.device;
+            let marker = if selected { "◉" } else { "○" };
+            let mut style = if !row.enabled {
+                theme::dim_style()
+            } else if selected {
+                Style::new().fg(theme::ok()).add_modifier(Modifier::BOLD)
+            } else if theme::hovered(rect) {
+                Style::new().fg(theme::accent2())
+            } else {
+                Style::new()
+            };
+            if !row.enabled {
+                style = style.add_modifier(Modifier::DIM);
+            }
+            let mut spans = vec![Span::styled(format!("{marker} {}", row.label), style)];
+            if let Some(note) = row.note {
+                spans.push(Span::styled(format!("  {note}"), theme::dim_style()));
+            }
+            frame.render_widget(Paragraph::new(Line::from(spans)), rect);
+            if row.enabled {
+                theme::add(rect, Hit::Device(index));
+            }
+        }
     }
 
     fn render_advanced(&self, frame: &mut Frame, area: Rect, services: &dyn Services) {
         let focused = self.focus == Field::Advanced;
-        let style = if focused {
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+        let header = Rect::new(area.x, area.y, area.width, 1);
+        let style = if focused || theme::hovered(header) {
+            Style::new()
+                .fg(theme::accent())
+                .add_modifier(Modifier::BOLD)
         } else {
-            Style::new().fg(DIM)
+            theme::dim_style()
         };
         let marker = if self.advanced_open { "▾" } else { "▸" };
-        let header = Rect::new(area.x, area.y, area.width, 1);
         frame.render_widget(
             Paragraph::new(Span::styled(format!("{marker} Advanced"), style)),
             header,
         );
+        theme::add(header, Hit::Setup(Field::Advanced));
         if !self.advanced_open {
             return;
         }
@@ -605,12 +710,12 @@ impl SetupState {
         let [compute, chunk] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
                 .areas(rest);
-        let compute_block = self.field_block(Field::Compute, "Compute type");
-        let inner = compute_block.inner(compute);
-        frame.render_widget(compute_block, compute);
-        frame.render_widget(
-            Paragraph::new(self.select_line(Field::Compute, self.compute_text(services))),
-            inner,
+        self.render_select(
+            frame,
+            compute,
+            Field::Compute,
+            "Compute type",
+            self.compute_text(services),
         );
         self.render_text_field(
             frame,
