@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
+use ratatui::widgets::{Block, Paragraph};
+
+use super::theme::{self, Hit};
 
 /// File types worth offering. FFmpeg can read more; type the path for those.
 const MEDIA_EXTENSIONS: &[&str] = &[
@@ -15,8 +17,6 @@ const MEDIA_EXTENSIONS: &[&str] = &[
     "mkv", "mov", "avi", "webm", "wmv", "flv", "3gp", "ts",
 ];
 
-const ACCENT: Color = Color::Cyan;
-const DIM: Color = Color::DarkGray;
 const PAGE: usize = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +41,8 @@ pub enum PickerAction {
 }
 
 pub struct PickerState {
+    /// First row shown; only moves when the highlight leaves the view.
+    offset: std::cell::Cell<usize>,
     dir: PathBuf,
     entries: Vec<Entry>,
     selected: usize,
@@ -56,6 +58,7 @@ pub fn is_media(path: &Path) -> bool {
 impl PickerState {
     pub fn open(dir: &Path) -> Self {
         let mut state = PickerState {
+            offset: std::cell::Cell::new(0),
             dir: PathBuf::new(),
             entries: Vec::new(),
             selected: 0,
@@ -119,6 +122,7 @@ impl PickerState {
         }
         self.entries.extend(folders);
         self.entries.extend(files);
+        self.offset.set(0);
         self.selected = keep
             .and_then(|keep| self.entries.iter().position(|entry| entry.path == keep))
             .unwrap_or(usize::from(
@@ -154,6 +158,38 @@ impl PickerState {
         }
     }
 
+    /// Move the highlight by `delta` rows (the mouse wheel).
+    pub fn scroll(&mut self, delta: isize) {
+        self.select(self.selected as isize + delta);
+    }
+
+    /// Show the `index`th folder of the current path (0 is the root).
+    pub fn go_to_ancestor(&mut self, index: usize) {
+        let mut chain: Vec<PathBuf> = self.dir.ancestors().map(Path::to_path_buf).collect();
+        chain.reverse();
+        if let Some(target) = chain.get(index).cloned() {
+            let came_from = self.dir.clone();
+            self.load(target, Some(&came_from));
+        }
+    }
+
+    pub fn is_selected(&self, index: usize) -> bool {
+        self.selected == index
+    }
+
+    /// A click on row `index`: the first click selects, a click on the
+    /// highlighted row opens it, like Enter.
+    pub fn click(&mut self, index: usize) -> PickerAction {
+        if index >= self.entries.len() {
+            return PickerAction::None;
+        }
+        if index == self.selected {
+            return self.handle_key(&KeyEvent::from(KeyCode::Enter));
+        }
+        self.selected = index;
+        PickerAction::None
+    }
+
     pub fn handle_key(&mut self, key: &KeyEvent) -> PickerAction {
         let selected = self.selected as isize;
         if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -180,6 +216,16 @@ impl PickerState {
                     }
                 }
             }
+            KeyCode::Char('~') => {
+                if let Some(home) = std::env::home_dir() {
+                    self.load(home, None);
+                }
+            }
+            KeyCode::Char('/') => {
+                if let Some(root) = self.dir.ancestors().last().map(Path::to_path_buf) {
+                    self.load(root, None);
+                }
+            }
             KeyCode::Char(letter) => self.jump_to(letter),
             _ => {}
         }
@@ -187,19 +233,24 @@ impl PickerState {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
+        theme::add(area, Hit::PickerOutside);
         let [popup] = Layout::horizontal([Constraint::Percentage(80)])
             .flex(Flex::Center)
             .areas(area);
         let [popup] = Layout::vertical([Constraint::Percentage(85)])
             .flex(Flex::Center)
             .areas(popup);
-        frame.render_widget(Clear, popup);
+        theme::clear(frame, popup);
+        theme::add(popup, Hit::Nothing);
 
         let block = Block::bordered()
-            .border_style(Style::new().fg(ACCENT))
+            .border_type(theme::BORDER)
+            .border_style(Style::new().fg(theme::accent()))
             .title(Span::styled(
                 " Choose a file ",
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                Style::new()
+                    .fg(theme::accent())
+                    .add_modifier(Modifier::BOLD),
             ));
         let inner = block.inner(popup);
         frame.render_widget(block, popup);
@@ -211,53 +262,86 @@ impl PickerState {
         ])
         .areas(inner);
 
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                self.dir.display().to_string(),
-                Style::new().fg(DIM),
-            )),
-            path_area,
-        );
+        // The path, each folder in it clickable.
+        let mut chain: Vec<&Path> = self.dir.ancestors().collect();
+        chain.reverse();
+        let mut start = 0;
+        for (index, folder) in chain.iter().enumerate() {
+            let end = folder.display().to_string().chars().count();
+            let x = (path_area.x + start as u16).min(path_area.right());
+            let width = ((end - start) as u16).min(path_area.right() - x);
+            let rect = Rect::new(x, path_area.y, width, 1);
+            let style = if theme::hovered(rect) {
+                Style::new()
+                    .fg(theme::accent2())
+                    .add_modifier(Modifier::UNDERLINED)
+            } else {
+                theme::dim_style()
+            };
+            let text: String = self
+                .dir
+                .display()
+                .to_string()
+                .chars()
+                .skip(start)
+                .take(end - start)
+                .collect();
+            frame.render_widget(Paragraph::new(Span::styled(text, style)), rect);
+            theme::add(rect, Hit::PickerCrumb(index));
+            start = end;
+        }
 
-        let items: Vec<ListItem> = self
-            .entries
-            .iter()
-            .map(|entry| {
-                let (icon, style) = match entry.kind {
-                    EntryKind::Parent => ("↰ ", Style::new().fg(DIM)),
-                    EntryKind::Folder => ("▸ ", Style::new().fg(ACCENT)),
-                    EntryKind::File => ("  ", Style::new()),
-                };
-                ListItem::new(Line::from(Span::styled(
-                    format!("{icon}{}", entry.name),
-                    style,
-                )))
-            })
-            .collect();
-        if items.is_empty() {
+        if self.entries.is_empty() {
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     "No audio or video files here",
-                    Style::new().fg(DIM),
+                    theme::dim_style(),
                 )),
                 list_area,
             );
         }
-        let list = List::new(items)
-            .highlight_style(
-                Style::new()
-                    .bg(Color::Indexed(238))
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("");
-        let mut state = ListState::default().with_selected(Some(self.selected));
-        frame.render_stateful_widget(list, list_area, &mut state);
+        // Scroll just far enough to keep the highlighted row in view.
+        let height = list_area.height as usize;
+        let mut first = self.offset.get();
+        if self.selected < first {
+            first = self.selected;
+        } else if self.selected >= first + height {
+            first = self.selected + 1 - height;
+        }
+        self.offset.set(first);
+        for (offset, (index, entry)) in self
+            .entries
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(height)
+            .enumerate()
+        {
+            let rect = Rect::new(list_area.x, list_area.y + offset as u16, list_area.width, 1);
+            let (icon, mut style) = match entry.kind {
+                EntryKind::Parent => ("↰ ", theme::dim_style()),
+                EntryKind::Folder => ("▸ ", Style::new().fg(theme::accent())),
+                EntryKind::File => ("♪ ", Style::new().fg(theme::accent2())),
+            };
+            if index == self.selected {
+                style = style.bg(theme::surface()).add_modifier(Modifier::BOLD);
+            } else if theme::hovered(rect) {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
+            let line = format!(" {icon}{}", entry.name);
+            let pad = (rect.width as usize).saturating_sub(line.chars().count());
+            frame.render_widget(
+                Paragraph::new(Span::styled(format!("{line}{}", " ".repeat(pad)), style)),
+                rect,
+            );
+            theme::add(rect, Hit::PickerRow(index));
+        }
 
         let hint = match &self.error {
-            Some(error) => Span::styled(error.clone(), Style::new().fg(Color::Red)),
+            Some(error) => Span::styled(error.clone(), Style::new().fg(theme::error())),
             None => Span::styled(
-                "Enter open · Backspace up · type to jump · Esc cancel",
-                Style::new().fg(DIM),
+                "Enter open · Backspace up · ~ home · / root · click the path · Esc cancel",
+                theme::dim_style(),
             ),
         };
         frame.render_widget(Paragraph::new(hint), footer_area);

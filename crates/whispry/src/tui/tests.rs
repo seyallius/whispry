@@ -774,3 +774,334 @@ fn a_system_without_a_gpu_never_hints_at_downloads() {
     assert!(text.contains("No NVIDIA GPU found"));
     assert!(!text.to_lowercase().contains("download gpu"));
 }
+
+// ----- mouse -----
+
+use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+use super::theme::{Hit, rect_of};
+
+thread_local! {
+    static CLOCK: (std::time::Instant, Cell<u32>) = (std::time::Instant::now(), Cell::new(0));
+}
+
+/// A moment `ms` later than the last one asked for.
+fn later(ms: u32) -> std::time::Instant {
+    CLOCK.with(|(start, passed)| {
+        passed.set(passed.get() + ms);
+        *start + Duration::from_millis(u64::from(passed.get()))
+    })
+}
+
+fn click_at(app: &mut App, hit: Hit, ms_later: u32) {
+    let rect = rect_of(hit).unwrap_or_else(|| panic!("{hit:?} is not on screen"));
+    app.on_mouse_at(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + rect.width / 2,
+            row: rect.y + rect.height / 2,
+            modifiers: KeyModifiers::NONE,
+        },
+        later(ms_later),
+    );
+}
+
+/// Click the middle of whatever `hit` was last drawn as, well after any
+/// earlier click.
+fn click(app: &mut App, hit: Hit) {
+    click_at(app, hit, 1000);
+}
+
+#[test]
+fn clicking_start_begins_the_job() {
+    let (mut app, _dir, _audio) = app_with_file(FakeServices::new(0));
+    FFMPEG_INSTALLED.set(true);
+    let before = jobs_started();
+    screen(&app, 100, 34);
+    click(&mut app, Hit::Setup(super::setup::Field::Start));
+    assert_eq!(jobs_started(), before + 1);
+    assert!(screen(&app, 100, 34).contains("Transcribing"));
+}
+
+#[test]
+fn clicking_an_arrow_changes_the_choice() {
+    let mut app = App::new(Box::new(FakeServices::new(0)), None);
+    screen(&app, 100, 34);
+    click(&mut app, Hit::Arrow(super::setup::Field::Model, true));
+    let text = screen(&app, 100, 34);
+    assert!(!text.contains("Small (downloaded)"), "{text}");
+}
+
+#[test]
+fn clicking_the_picker_selects_then_opens_and_outside_closes() {
+    let (mut app, dir, audio) = app_with_file(FakeServices::new(0));
+    screen(&app, 100, 34);
+    click(&mut app, Hit::Browse);
+    let text = screen(&app, 100, 34);
+    assert!(
+        text.contains("Choose a file") && text.contains("talk.mp3"),
+        "{text}"
+    );
+    let row = (0..9)
+        .map(Hit::PickerRow)
+        .find(|hit| {
+            rect_of(*hit).is_some() && {
+                let r = rect_of(*hit).unwrap();
+                text.lines()
+                    .nth(r.y as usize)
+                    .is_some_and(|l| l.contains("talk.mp3"))
+            }
+        })
+        .expect("the file is listed");
+    // The file starts highlighted, so one click opens it.
+    click(&mut app, row);
+    let text = screen(&app, 100, 34);
+    assert!(!text.contains("Choose a file"), "{text}");
+    assert!(text.contains(&audio.display().to_string()) || text.contains("talk.mp3"));
+
+    click(&mut app, Hit::Browse);
+    screen(&app, 100, 34);
+    app.on_mouse_at(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        },
+        later(1000),
+    );
+    assert!(!screen(&app, 100, 34).contains("Choose a file"));
+    drop(dir);
+}
+
+#[test]
+fn clicking_a_run_button_works() {
+    let (mut app, dir) = running_app();
+    send(JobMessage::Done(Ok(summary(&dir.path().join("talk.txt")))));
+    deliver(&mut app);
+    screen(&app, 100, 34);
+    click(&mut app, Hit::Run(super::run::Button::New));
+    let text = screen(&app, 100, 34);
+    assert!(text.contains("Start transcription"), "{text}");
+}
+
+#[test]
+fn a_double_click_on_a_button_acts_once() {
+    // Retry on CPU and Cancel share a spot; the second click must not hit Cancel.
+    let (mut app, _dir) = running_app();
+    send(JobMessage::Done(Err(JobError::Engine(EngineError::Load {
+        device: "cuda".into(),
+        message: "out of memory".into(),
+    }))));
+    deliver(&mut app);
+    screen(&app, 100, 34);
+    let before = jobs_started();
+    click_at(&mut app, Hit::Run(super::run::Button::RetryOnCpu), 1000);
+    screen(&app, 100, 34);
+    click_at(&mut app, Hit::Run(super::run::Button::Cancel), 100);
+    assert_eq!(jobs_started(), before + 1);
+    assert!(!last_cancel().is_cancelled());
+}
+
+#[test]
+fn a_double_click_on_browse_keeps_the_picker_open() {
+    let (mut app, _dir, _audio) = app_with_file(FakeServices::new(0));
+    screen(&app, 100, 34);
+    click_at(&mut app, Hit::Browse, 1000);
+    screen(&app, 100, 34);
+    app.on_mouse_at(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 95,
+            row: 7,
+            modifiers: KeyModifiers::NONE,
+        },
+        later(100),
+    );
+    assert!(screen(&app, 100, 34).contains("Choose a file"));
+}
+
+#[test]
+fn the_picker_does_not_scroll_under_a_click() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..40 {
+        std::fs::write(dir.path().join(format!("clip{i:02}.mp3")), b"").unwrap();
+    }
+    let mut app = App::new(
+        Box::new(FakeServices::new(0)),
+        Some(dir.path().join("clip00.mp3")),
+    );
+    screen(&app, 100, 34);
+    click(&mut app, Hit::Browse);
+    screen(&app, 100, 34);
+    for _ in 0..39 {
+        press(&mut app, KeyCode::Down);
+    }
+    let before = screen(&app, 100, 34);
+    let row = before
+        .lines()
+        .position(|l| l.contains("clip20.mp3"))
+        .expect("clip20 is visible");
+    click(&mut app, Hit::PickerRow(21)); // ".." is row 0
+    let after = screen(&app, 100, 34);
+    assert_eq!(
+        after.lines().position(|l| l.contains("clip20.mp3")),
+        Some(row),
+        "{after}"
+    );
+}
+
+#[test]
+fn the_setup_screen_fits_a_standard_80x24_terminal() {
+    let mut app = App::new(Box::new(FakeServices::new(0)), None);
+    for _ in 0..4 {
+        press(&mut app, KeyCode::Tab);
+    }
+    press(&mut app, KeyCode::Enter); // open Advanced
+    let text = screen(&app, 80, 24);
+    assert!(text.contains("Minutes per chunk"), "{text}");
+    assert!(text.contains("Start transcription"), "{text}");
+}
+
+#[test]
+fn question_mark_opens_help_and_escape_closes_it() {
+    let mut app = App::new(Box::new(FakeServices::new(0)), None);
+    // Typing "?" in the File field must still type.
+    press(&mut app, KeyCode::Char('?'));
+    assert!(!screen(&app, 100, 34).contains("Anywhere"));
+    press(&mut app, KeyCode::Tab); // Model: not a text field
+    press(&mut app, KeyCode::Char('?'));
+    let text = screen(&app, 100, 40);
+    assert!(
+        text.contains("Anywhere") && text.contains("File browser"),
+        "{text}"
+    );
+    press(&mut app, KeyCode::Esc);
+    assert!(!screen(&app, 100, 40).contains("Anywhere"));
+    press(&mut app, KeyCode::F(1));
+    assert!(screen(&app, 100, 40).contains("Ctrl+T"));
+    click(&mut app, Hit::HelpClose);
+    assert!(!screen(&app, 100, 40).contains("Ctrl+T"));
+}
+
+#[test]
+fn the_help_chip_can_be_clicked() {
+    let mut app = App::new(Box::new(FakeServices::new(0)), None);
+    screen(&app, 100, 34);
+    click(&mut app, Hit::Help);
+    assert!(screen(&app, 100, 40).contains("Anywhere"));
+}
+
+#[test]
+fn ctrl_t_and_the_theme_chip_change_the_theme() {
+    let mut app = App::new(Box::new(FakeServices::new(0)), None);
+    let before = screen(&app, 100, 34);
+    ctrl(&mut app, 't');
+    let after = screen(&app, 100, 34);
+    assert_ne!(before, after);
+    click(&mut app, Hit::Theme);
+    assert_ne!(after, screen(&app, 100, 34));
+    for _ in 0..4 {
+        click(&mut app, Hit::Theme);
+        screen(&app, 100, 34);
+    }
+}
+
+#[test]
+fn the_picker_can_climb_to_the_root_and_jump_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let nested = dir.path().join("a").join("b");
+    std::fs::create_dir_all(&nested).unwrap();
+    let mut picker = super::file_picker::PickerState::open(&nested);
+    let mut depth = 0;
+    while picker.entries().first().is_some_and(|e| e.name == "..") && depth < 64 {
+        picker.handle_key(&KeyEvent::from(KeyCode::Backspace));
+        depth += 1;
+    }
+    assert!(depth >= 3, "climbed only {depth} levels");
+    // From the top, `/` stays there and `~` goes home.
+    picker.handle_key(&KeyEvent::from(KeyCode::Char('/')));
+    assert!(picker.entries().iter().all(|e| e.name != ".."));
+    if std::env::home_dir().is_some() {
+        picker.handle_key(&KeyEvent::from(KeyCode::Char('~')));
+        assert_eq!(
+            picker.entries().first().map(|e| e.name.as_str()),
+            Some("..")
+        );
+    }
+}
+
+#[test]
+fn clicking_a_folder_in_the_path_goes_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let nested = dir.path().join("a").join("b");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(nested.join("x.mp3"), b"").unwrap();
+    let mut app = App::new(Box::new(FakeServices::new(0)), Some(nested.join("x.mp3")));
+    screen(&app, 120, 34);
+    click(&mut app, Hit::Browse);
+    screen(&app, 120, 34);
+    click(&mut app, Hit::PickerCrumb(0)); // the root
+    let text = screen(&app, 120, 34);
+    assert!(!text.contains("x.mp3"), "{text}");
+}
+
+/// Every cell of the screen, as (background, text).
+fn cells(app: &App, width: u16, height: u16) -> Vec<(ratatui::style::Color, String)> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
+        .map(|(x, y)| (buffer[(x, y)].bg, buffer[(x, y)].symbol().to_string()))
+        .collect()
+}
+
+#[test]
+fn every_theme_paints_the_whole_screen_including_popups() {
+    let (mut app, _dir, _audio) = app_with_file(FakeServices::new(0));
+    for _ in 0..super::theme::THEMES.len() {
+        ctrl(&mut app, 't');
+        let want = super::theme::bg();
+        for (label, setup) in [("setup", true), ("picker", false)] {
+            if !setup {
+                ctrl(&mut app, 'o');
+            }
+            for (bg, symbol) in cells(&app, 100, 34) {
+                let surface = super::theme::surface();
+                let accent = super::theme::accent();
+                let accent2 = super::theme::accent2();
+                assert!(
+                    [want, surface, accent, accent2].contains(&bg),
+                    "{label}: {symbol:?} has the terminal's own background"
+                );
+            }
+            if !setup {
+                press(&mut app, KeyCode::Esc);
+            }
+        }
+    }
+}
+
+#[test]
+fn the_run_screen_says_what_part_is_being_decoded() {
+    let (mut app, _dir) = running_app();
+    send(JobMessage::Event(Event::StageStarted {
+        stage: Stage::Transcribe,
+        message: "Transcribing...".into(),
+    }));
+    deliver(&mut app);
+    let text = screen(&app, 100, 34);
+    assert!(text.contains("decoding the first part"), "{text}");
+    assert!(text.contains("Text appears here"), "{text}");
+
+    send(JobMessage::Event(Event::Progress {
+        stage: Stage::Transcribe,
+        completed: 26.0,
+        total: Some(64.0),
+        unit: "s".into(),
+    }));
+    deliver(&mut app);
+    let text = screen(&app, 100, 34);
+    assert!(text.contains("decoding 00:26 to 00:52"), "{text}");
+}

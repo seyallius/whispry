@@ -3,16 +3,13 @@
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 use whispry_core::config::JobConfig;
 
 use super::run::wrap;
-
-const ACCENT: Color = Color::Cyan;
-const DIM: Color = Color::DarkGray;
-const WARN: Color = Color::Yellow;
+use super::theme::{self, Hit};
 
 #[derive(Debug, PartialEq)]
 pub enum DialogAction {
@@ -45,6 +42,11 @@ impl FFmpegDialog {
     /// FFmpeg was looked for again and still is not there.
     pub fn report_still_missing(&mut self) {
         self.still_missing = true;
+    }
+
+    /// Focus button `index`; the caller then presses it like Enter.
+    pub fn focus_on(&mut self, index: usize) {
+        self.focus = index.min(BUTTONS.len() - 1);
     }
 
     pub fn handle_key(&mut self, key: &KeyEvent) -> DialogAction {
@@ -90,46 +92,42 @@ impl FFmpegDialog {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "Then choose Check again. Your choices are kept.",
-            Style::new().fg(DIM),
+            theme::dim_style(),
         )));
         if self.still_missing {
             lines.push(Line::from(Span::styled(
                 "FFmpeg is still not found. Open a new terminal after installing, so PATH is up to date.",
-                Style::new().fg(WARN),
+                Style::new().fg(theme::warn()),
             )));
         }
         lines.push(Line::from(""));
-        let mut buttons = Vec::new();
-        for (index, label) in BUTTONS.iter().enumerate() {
-            let style = if index == self.focus {
-                Style::new()
-                    .fg(Color::Black)
-                    .bg(ACCENT)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::new().fg(ACCENT)
-            };
-            buttons.push(Span::styled(format!(" {label} "), style));
-            buttons.push(Span::raw("  "));
-        }
-        lines.push(Line::from(buttons));
+        lines.push(Line::from(""));
 
         let height = (lines.len() as u16 + 2).min(area.height);
         let [popup] = Layout::vertical([Constraint::Length(height)])
             .flex(Flex::Center)
             .areas(popup);
-        frame.render_widget(Clear, popup);
+        theme::add(area, Hit::Nothing);
+        theme::clear(frame, popup);
+        let button_row = popup.y + popup.height.saturating_sub(2);
         frame.render_widget(
             Paragraph::new(lines).block(
                 Block::bordered()
-                    .border_style(Style::new().fg(WARN))
+                    .border_type(theme::BORDER)
+                    .border_style(Style::new().fg(theme::warn()))
                     .title(Span::styled(
                         " FFmpeg is needed ",
-                        Style::new().fg(WARN).add_modifier(Modifier::BOLD),
+                        Style::new().fg(theme::warn()).add_modifier(Modifier::BOLD),
                     ))
                     .padding(ratatui::widgets::Padding::horizontal(1)),
             ),
             popup,
         );
+        let items: Vec<(&str, Hit, bool)> = BUTTONS
+            .iter()
+            .enumerate()
+            .map(|(i, label)| (*label, Hit::Dialog(i), i == self.focus))
+            .collect();
+        theme::buttons(frame, popup.x + 2, button_row, &items);
     }
 }
