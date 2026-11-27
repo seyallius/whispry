@@ -614,8 +614,7 @@ impl SetupState {
             );
         }
 
-        let hints =
-            " Tab move · ←/→ change · Ctrl+O browse · Ctrl+S start · Ctrl+Q quit · mouse works too";
+        let hints = " Tab move · ←/→ change · Ctrl+S start · Ctrl+Q quit";
         frame.render_widget(
             Paragraph::new(Span::styled(hints, theme::dim_style())),
             footer,

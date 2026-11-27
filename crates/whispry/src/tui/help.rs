@@ -34,22 +34,19 @@ const SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("Backspace, ←", "Up one folder"),
             ("~   /", "Jump to your home folder / the root"),
             ("a-z", "Jump to a name starting with that letter"),
-            ("Esc", "Close"),
         ],
     ),
     (
         "While transcribing",
         &[
             ("Esc", "Cancel (text so far is kept)"),
-            ("Tab, Enter", "Pick and press a button"),
             ("N / R / Q", "New / Retry on CPU / Quit, when finished"),
         ],
     ),
     (
         "Mouse",
         &[
-            ("Click", "Buttons, fields, ◀ ▶ arrows, folders, path parts"),
-            ("Click a selected row", "Open it"),
+            ("Click", "Any button, field, arrow or folder"),
             ("Wheel", "Scroll the file list"),
             ("Shift+drag", "Select text (Option+drag in iTerm2)"),
         ],
@@ -85,7 +82,7 @@ pub fn render(frame: &mut Frame, area: Rect, scroll: u16) {
     let [popup] = Layout::horizontal([Constraint::Length(area.width.min(84))])
         .flex(Flex::Center)
         .areas(area);
-    let height = (all.len() as u16 + 4).min(area.height);
+    let height = (all.len() as u16 + 2).min(area.height);
     let [popup] = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)
         .areas(popup);

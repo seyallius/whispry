@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/transcribing.png" alt="Whispry transcribing a meeting recording, with a live transcript and progress" width="820">
+  <img src="docs/screenshots/demo.gif" alt="Whispry in action: switching themes, opening help, clicking Start, and watching the transcript fill in" width="820">
 </p>
 
 Whispry is a friendly terminal app for speech-to-text. Point it at a
@@ -57,8 +57,13 @@ any folder in the path at the top to jump straight there.
 </p>
 
 **Watch it work.** The transcript fills in as Whispry listens, with
-progress, speed, and an estimate of the time left. Changed your mind?
-Press `Esc`; anything already transcribed is kept.
+progress, speed, and an estimate of the time left. The bar shows which part
+of the audio is being decoded right now, so you can always tell it's busy.
+Changed your mind? Press `Esc`; anything already transcribed is kept.
+
+<p align="center">
+  <img src="docs/screenshots/transcribing.png" alt="Whispry transcribing a recording, with a live transcript and progress" width="720">
+</p>
 
 **Get your text.** A timestamped `.txt` file lands right next to your
 recording.
@@ -74,7 +79,23 @@ steps for your system and picks up where you left off once it's installed.
   <img src="docs/screenshots/ffmpeg.png" alt="Dialog explaining how to install FFmpeg" width="720">
 </p>
 
-_Screenshots show demo content and the original look; themes and the new layout differ._
+**Make it yours.** Twelve themes, light and dark: Aurora, Sunset, Ocean,
+Forest, Neon, Mono, Paper, Dracula, Nord, Gruvbox, Solarized and Dawn. Press
+`Ctrl+T` or click the theme name at the bottom; Whispry remembers your pick.
+
+<p align="center">
+  <img src="docs/screenshots/themes.png" alt="The setup screen in all twelve themes" width="820">
+</p>
+
+**Forgot a key? Press `?`.** Every shortcut and mouse action is listed, and
+the mouse works everywhere.
+
+<p align="center">
+  <img src="docs/screenshots/help.png" alt="The help screen listing every key and mouse action" width="720">
+</p>
+
+_Screenshots are real, taken from Whispry transcribing a short synthetic
+recording. Regenerate them with `scripts/screenshots.py`._
 
 ## Features
 
@@ -177,7 +198,7 @@ model, language, and device, then press **Start**.
 | `Ctrl+O` | Browse for a file |
 | `Ctrl+S` | Start transcribing |
 | `?` or `F1` | Show every key and mouse action (`?` types normally in a text field; use `F1` there) |
-| `Ctrl+T` | Switch theme (Aurora, Sunset, Ocean, Forest, Neon, Mono); your choice is remembered |
+| `Ctrl+T` | Next theme (12 to choose from, light and dark); your choice is remembered |
 | `Esc` | Cancel a running job (text so far is kept) |
 | `Ctrl+Q` | Quit (cancels a running job first) |
 
@@ -253,6 +274,10 @@ just lint    # formatting and clippy
 just run     # run Whispry from the checkout
 just check   # show detected devices and FFmpeg
 ```
+
+To retake the screenshots and demo GIF, build a release binary and run
+`python3 scripts/screenshots.py` (needs `pip install pyte pillow`, `ffmpeg`,
+`espeak-ng` and a downloaded Small model).
 
 Tests that need FFmpeg are skipped when it is missing. Set
 `WHISPRY_TEST_STRICT=1` to make them fail instead, as CI does.
