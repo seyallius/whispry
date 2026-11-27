@@ -4,7 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 
 use super::theme::{self, Hit};
 
@@ -89,7 +89,7 @@ pub fn render(frame: &mut Frame, area: Rect, scroll: u16) {
     let [popup] = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)
         .areas(popup);
-    frame.render_widget(Clear, popup);
+    theme::clear(frame, popup);
     let block = Block::bordered()
         .border_type(theme::BORDER)
         .border_style(Style::new().fg(theme::accent()))

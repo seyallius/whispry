@@ -5,7 +5,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 use whispry_core::config::JobConfig;
 
 use super::run::wrap;
@@ -108,7 +108,7 @@ impl FFmpegDialog {
             .flex(Flex::Center)
             .areas(popup);
         theme::add(area, Hit::Nothing);
-        frame.render_widget(Clear, popup);
+        theme::clear(frame, popup);
         let button_row = popup.y + popup.height.saturating_sub(2);
         frame.render_widget(
             Paragraph::new(lines).block(

@@ -1045,3 +1045,63 @@ fn clicking_a_folder_in_the_path_goes_there() {
     let text = screen(&app, 120, 34);
     assert!(!text.contains("x.mp3"), "{text}");
 }
+
+/// Every cell of the screen, as (background, text).
+fn cells(app: &App, width: u16, height: u16) -> Vec<(ratatui::style::Color, String)> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
+        .map(|(x, y)| (buffer[(x, y)].bg, buffer[(x, y)].symbol().to_string()))
+        .collect()
+}
+
+#[test]
+fn every_theme_paints_the_whole_screen_including_popups() {
+    let (mut app, _dir, _audio) = app_with_file(FakeServices::new(0));
+    for _ in 0..super::theme::THEMES.len() {
+        ctrl(&mut app, 't');
+        let want = super::theme::bg();
+        for (label, setup) in [("setup", true), ("picker", false)] {
+            if !setup {
+                ctrl(&mut app, 'o');
+            }
+            for (bg, symbol) in cells(&app, 100, 34) {
+                let surface = super::theme::surface();
+                let accent = super::theme::accent();
+                let accent2 = super::theme::accent2();
+                assert!(
+                    [want, surface, accent, accent2].contains(&bg),
+                    "{label}: {symbol:?} has the terminal's own background"
+                );
+            }
+            if !setup {
+                press(&mut app, KeyCode::Esc);
+            }
+        }
+    }
+}
+
+#[test]
+fn the_run_screen_says_what_part_is_being_decoded() {
+    let (mut app, _dir) = running_app();
+    send(JobMessage::Event(Event::StageStarted {
+        stage: Stage::Transcribe,
+        message: "Transcribing...".into(),
+    }));
+    deliver(&mut app);
+    let text = screen(&app, 100, 34);
+    assert!(text.contains("decoding the first part"), "{text}");
+    assert!(text.contains("Text appears here"), "{text}");
+
+    send(JobMessage::Event(Event::Progress {
+        stage: Stage::Transcribe,
+        completed: 26.0,
+        total: Some(64.0),
+        unit: "s".into(),
+    }));
+    deliver(&mut app);
+    let text = screen(&app, 100, 34);
+    assert!(text.contains("decoding 00:26 to 00:52"), "{text}");
+}

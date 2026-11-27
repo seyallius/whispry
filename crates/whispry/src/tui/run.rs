@@ -101,6 +101,9 @@ pub struct RunState {
     /// Quit as soon as the job has stopped.
     quit_when_stopped: bool,
     focus: usize,
+    /// Seconds of audio the last update covered: roughly what is being
+    /// worked on now, which the bar shows rippling.
+    step: f64,
 }
 
 /// Break text into lines of at most `width` characters, at spaces if possible.
@@ -173,6 +176,7 @@ impl RunState {
             ended: None,
             quit_when_stopped: false,
             focus: 0,
+            step: 30.0,
         }
     }
 
@@ -225,6 +229,12 @@ impl RunState {
                 total,
                 unit,
             } => {
+                if *stage == Stage::Transcribe && unit != "B" {
+                    let before = self.progress.as_ref().map_or(0.0, |p| p.completed);
+                    if completed - before >= 1.0 {
+                        self.step = completed - before;
+                    }
+                }
                 self.progress = Some(ProgressInfo {
                     stage: *stage,
                     completed: *completed,
@@ -437,6 +447,26 @@ impl RunState {
 
     // ----- drawing -----
 
+    /// What is happening right now, in words. Between updates the engine is
+    /// busy with the next part, so say which part.
+    fn working_text(&self) -> String {
+        if self.transcribing_since.is_none() {
+            return self.stage_message.clone();
+        }
+        match &self.progress {
+            None => "Transcribing: decoding the first part (the first words take a moment)".into(),
+            Some(p) if p.unit != "B" => match p.total {
+                Some(total) if p.completed < total => format!(
+                    "Transcribing: decoding {} to {}",
+                    format_timestamp(p.completed),
+                    format_timestamp((p.completed + self.step).min(total))
+                ),
+                _ => self.stage_message.clone(),
+            },
+            Some(_) => self.stage_message.clone(),
+        }
+    }
+
     fn summary_line(&self) -> String {
         let name = self.config.audio.file_name().map_or_else(
             || self.config.audio.display().to_string(),
@@ -518,7 +548,7 @@ impl RunState {
     fn render_progress(&self, frame: &mut Frame, area: Rect, now: Instant) {
         let block = Block::bordered()
             .border_type(theme::BORDER)
-            .border_style(theme::dim_style())
+            .border_style(theme::border_style())
             .title(" Progress ");
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -528,9 +558,8 @@ impl RunState {
             RunStatus::Finished { .. } => "Done.".to_string(),
             RunStatus::Cancelled { .. } => "Stopped.".to_string(),
             RunStatus::Failed { .. } => "Stopped by an error.".to_string(),
-            RunStatus::Running | RunStatus::Cancelling => {
-                format!("{} {}", theme::spinner(ms), self.stage_message)
-            }
+            RunStatus::Running => format!("{} {}", theme::spinner(ms), self.working_text()),
+            RunStatus::Cancelling => format!("{} {}", theme::spinner(ms), self.stage_message),
         };
         frame.render_widget(Paragraph::new(stage_text), stage);
 
@@ -542,7 +571,14 @@ impl RunState {
             None => "…".to_string(),
         };
         let width = (bar.width as usize).saturating_sub(label.chars().count() + 2);
-        let mut spans = theme::progress_bar(width, ratio, finished, ms);
+        let ahead = match (&self.progress, self.status == RunStatus::Running) {
+            (Some(p), true) if p.unit != "B" => p
+                .total
+                .filter(|total| *total > 0.0)
+                .map_or(0.0, |total| self.step / total),
+            _ => 0.0,
+        };
+        let mut spans = theme::progress_bar(width, ratio, ahead, finished, ms);
         spans.push(Span::styled(
             format!("  {label}"),
             Style::new().add_modifier(Modifier::BOLD),
@@ -566,7 +602,7 @@ impl RunState {
     ) {
         let block = Block::bordered()
             .border_type(theme::BORDER)
-            .border_style(theme::dim_style())
+            .border_style(theme::border_style())
             .title(title.to_string());
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -576,6 +612,17 @@ impl RunState {
         } else {
             lines.iter().map(|line| truncate(line, width)).collect()
         };
+        if is_transcript && lines.is_empty() && self.status == RunStatus::Running {
+            let text = "Text appears here as each part is finished…";
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    text,
+                    theme::dim_style().add_modifier(Modifier::ITALIC),
+                )),
+                inner,
+            );
+            return;
+        }
         let skip = shown_lines.len().saturating_sub(inner.height as usize);
         let style = if is_transcript {
             Style::new()

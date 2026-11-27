@@ -280,6 +280,7 @@ impl App {
     pub fn render(&self, frame: &mut Frame) {
         theme::clear_hits();
         let area = frame.area();
+        frame.render_widget(ratatui::widgets::Block::new().style(theme::base()), area);
         if let Some(run) = &self.run {
             run.render(frame, area, Instant::now());
         } else {

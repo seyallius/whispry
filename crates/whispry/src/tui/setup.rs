@@ -589,7 +589,7 @@ impl SetupState {
                 .block(
                     Block::bordered()
                         .border_type(theme::BORDER)
-                        .border_style(Style::new().fg(color).bg(style.bg.unwrap_or_default())),
+                        .border_style(Style::new().fg(color).bg(style.bg.unwrap_or(theme::bg()))),
                 ),
             button,
         );

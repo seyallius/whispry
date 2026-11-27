@@ -7,7 +7,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 
 use super::theme::{self, Hit};
 
@@ -240,7 +240,7 @@ impl PickerState {
         let [popup] = Layout::vertical([Constraint::Percentage(85)])
             .flex(Flex::Center)
             .areas(popup);
-        frame.render_widget(Clear, popup);
+        theme::clear(frame, popup);
         theme::add(popup, Hit::Nothing);
 
         let block = Block::bordered()
