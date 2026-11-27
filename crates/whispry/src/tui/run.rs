@@ -641,6 +641,7 @@ impl RunState {
                 Paragraph::new(Span::styled(" Stopping, one moment…", theme::dim_style())),
                 area,
             );
+            theme::chips(frame, area);
             return;
         }
         let items: Vec<(&str, Hit, bool)> = buttons
@@ -649,14 +650,12 @@ impl RunState {
             .map(|(index, button)| (button.label(), Hit::Run(*button), index == self.focus))
             .collect();
         let used = theme::buttons(frame, area.x, area.y, &items);
+        theme::chips(frame, area);
         if self.status == RunStatus::Running {
             let x = area.x + used + 2;
             if x < area.right() {
                 frame.render_widget(
-                    Paragraph::new(Span::styled(
-                        "Esc cancels · Ctrl+Q cancels and quits",
-                        theme::dim_style(),
-                    )),
+                    Paragraph::new(Span::styled("Esc cancels", theme::dim_style())),
                     Rect::new(x, area.y, area.right() - x, 1),
                 );
             }

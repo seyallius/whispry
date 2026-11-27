@@ -620,6 +620,7 @@ impl SetupState {
             Paragraph::new(Span::styled(hints, theme::dim_style())),
             footer,
         );
+        theme::chips(frame, Rect::new(footer.x, footer.y, footer.width, 1));
     }
 
     fn render_header(&self, frame: &mut Frame, area: Rect, services: &dyn Services) {

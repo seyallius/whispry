@@ -47,8 +47,10 @@ you why.
   <img src="docs/screenshots/setup.png" alt="Setup screen with file, model, language and device options" width="720">
 </p>
 
-**Browse for a file.** Press `Ctrl+O` to look around. Folders come first,
-then your audio and video files.
+**Browse for a file.** Press `Ctrl+O` (or click the hint) to look around.
+Folders come first, then your audio and video files. Go up with `Backspace`
+or the `..` row, press `~` for your home folder or `/` for the root, or click
+any folder in the path at the top to jump straight there.
 
 <p align="center">
   <img src="docs/screenshots/browser.png" alt="File browser listing folders and recordings" width="720">
@@ -72,7 +74,7 @@ steps for your system and picks up where you left off once it's installed.
   <img src="docs/screenshots/ffmpeg.png" alt="Dialog explaining how to install FFmpeg" width="720">
 </p>
 
-_Screenshots show demo content._
+_Screenshots show demo content and the original look; themes and the new layout differ._
 
 ## Features
 
@@ -174,8 +176,15 @@ model, language, and device, then press **Start**.
 | `←` / `→` | Change a choice |
 | `Ctrl+O` | Browse for a file |
 | `Ctrl+S` | Start transcribing |
+| `?` or `F1` | Show every key and mouse action (`?` types normally in a text field; use `F1` there) |
+| `Ctrl+T` | Switch theme (Aurora, Sunset, Ocean, Forest, Neon, Mono); your choice is remembered |
 | `Esc` | Cancel a running job (text so far is kept) |
 | `Ctrl+Q` | Quit (cancels a running job first) |
+
+The mouse works everywhere: click buttons, fields, the `◀ ▶` arrows, folders,
+and the `? Help` and theme chips at the bottom; scroll the file list with the
+wheel. While the mouse is captured, hold `Shift` (`Option` in iTerm2) to select
+text normally.
 
 You can also paste a path, quotes and all, straight into the file field.
 

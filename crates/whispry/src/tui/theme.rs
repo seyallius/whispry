@@ -44,29 +44,178 @@ pub fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::Indexed(16 + 36 * level(r) + 6 * level(g) + level(b))
 }
 
+type Rgb = (u8, u8, u8);
+
+pub struct Palette {
+    pub name: &'static str,
+    accent: Rgb,
+    accent2: Rgb,
+    ok: Rgb,
+    warn: Rgb,
+    error: Rgb,
+    dim: Rgb,
+    surface: Rgb,
+    ink: Rgb,
+    /// The gradient runs from `from` to `to`.
+    from: Rgb,
+    to: Rgb,
+}
+
+const SEMANTIC: (Rgb, Rgb, Rgb) = ((110, 231, 183), (251, 191, 36), (251, 113, 133));
+
+const fn palette(
+    name: &'static str,
+    accent: Rgb,
+    accent2: Rgb,
+    surface: Rgb,
+    from: Rgb,
+    to: Rgb,
+) -> Palette {
+    Palette {
+        name,
+        accent,
+        accent2,
+        ok: SEMANTIC.0,
+        warn: SEMANTIC.1,
+        error: SEMANTIC.2,
+        dim: (100, 116, 139),
+        surface,
+        ink: (17, 17, 27),
+        from,
+        to,
+    }
+}
+
+pub const THEMES: [Palette; 6] = [
+    palette(
+        "Aurora",
+        (167, 139, 250),
+        (45, 212, 191),
+        (46, 43, 74),
+        (167, 139, 250),
+        (45, 212, 191),
+    ),
+    palette(
+        "Sunset",
+        (251, 146, 60),
+        (244, 114, 182),
+        (68, 40, 40),
+        (251, 191, 36),
+        (244, 114, 182),
+    ),
+    palette(
+        "Ocean",
+        (96, 165, 250),
+        (34, 211, 238),
+        (30, 48, 80),
+        (96, 165, 250),
+        (45, 212, 191),
+    ),
+    palette(
+        "Forest",
+        (74, 222, 128),
+        (190, 242, 100),
+        (30, 58, 40),
+        (52, 211, 153),
+        (190, 242, 100),
+    ),
+    palette(
+        "Neon",
+        (255, 64, 200),
+        (0, 229, 255),
+        (56, 24, 72),
+        (255, 64, 200),
+        (0, 229, 255),
+    ),
+    palette(
+        "Mono",
+        (226, 232, 240),
+        (148, 163, 184),
+        (51, 56, 66),
+        (248, 250, 252),
+        (120, 130, 145),
+    ),
+];
+
+thread_local! {
+    static CURRENT: Cell<usize> = const { Cell::new(0) };
+}
+
+fn pal() -> &'static Palette {
+    &THEMES[CURRENT.get()]
+}
+
+pub fn theme_name() -> &'static str {
+    pal().name
+}
+
+/// Switch to the next theme and remember the choice.
+pub fn next_theme() {
+    set_theme((CURRENT.get() + 1) % THEMES.len());
+    save_theme();
+}
+
+fn set_theme(index: usize) {
+    CURRENT.set(index % THEMES.len());
+}
+
+fn theme_file() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .or_else(|| std::env::var_os("APPDATA"))
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::home_dir().map(|home| home.join(".config")))?;
+    Some(base.join("whispry").join("theme"))
+}
+
+fn save_theme() {
+    if cfg!(test) {
+        return; // tests must not touch the real config
+    }
+    if let Some(file) = theme_file() {
+        let _ = file.parent().map(std::fs::create_dir_all);
+        let _ = std::fs::write(file, pal().name);
+    }
+}
+
+/// Use the theme chosen last time, if any.
+pub fn load_theme() {
+    let saved = theme_file().and_then(|file| std::fs::read_to_string(file).ok());
+    if let Some(index) = saved.and_then(|name| {
+        THEMES
+            .iter()
+            .position(|t| t.name.eq_ignore_ascii_case(name.trim()))
+    }) {
+        set_theme(index);
+    }
+}
+
+fn color(c: Rgb) -> Color {
+    rgb(c.0, c.1, c.2)
+}
+
 pub fn accent() -> Color {
-    rgb(167, 139, 250) // violet
+    color(pal().accent)
 }
 pub fn accent2() -> Color {
-    rgb(45, 212, 191) // teal
+    color(pal().accent2)
 }
 pub fn dim() -> Color {
-    rgb(100, 116, 139)
+    color(pal().dim)
 }
 pub fn ok() -> Color {
-    rgb(110, 231, 183)
+    color(pal().ok)
 }
 pub fn warn() -> Color {
-    rgb(251, 191, 36)
+    color(pal().warn)
 }
 pub fn error() -> Color {
-    rgb(251, 113, 133)
+    color(pal().error)
 }
 pub fn surface() -> Color {
-    rgb(46, 43, 74)
+    color(pal().surface)
 }
 pub fn ink() -> Color {
-    rgb(17, 17, 27)
+    color(pal().ink)
 }
 
 pub const BORDER: BorderType = BorderType::Rounded;
@@ -75,11 +224,12 @@ pub fn dim_style() -> Style {
     Style::new().fg(dim())
 }
 
-/// Violet at 0, teal at 1.
+/// The theme's first colour at 0, its last at 1.
 pub fn gradient(t: f64) -> Color {
     let t = t.clamp(0.0, 1.0);
+    let (from, to) = (pal().from, pal().to);
     let mix = |a: u8, b: u8| (f64::from(a) + (f64::from(b) - f64::from(a)) * t).round() as u8;
-    rgb(mix(167, 45), mix(139, 212), mix(250, 191))
+    rgb(mix(from.0, to.0), mix(from.1, to.1), mix(from.2, to.2))
 }
 
 /// Border and title style of a box that may have focus.
@@ -204,7 +354,12 @@ pub enum Hit {
     Browse,
     Run(Button),
     PickerRow(usize),
+    /// A folder in the path shown above the picker's list (0 is the root).
+    PickerCrumb(usize),
     PickerOutside,
+    Help,
+    HelpClose,
+    Theme,
     Dialog(usize),
     /// Part of a popup that does nothing but keep clicks from passing through.
     Nothing,
@@ -284,4 +439,35 @@ pub fn buttons(frame: &mut Frame, x: u16, y: u16, items: &[(&str, Hit, bool)]) -
         at_x += width + 2;
     }
     at_x.saturating_sub(x + 2)
+}
+
+/// "? Help · ◐ Aurora", clickable, right-aligned on the row `area`.
+pub fn chips(frame: &mut Frame, area: Rect) {
+    let help = " ? Help ";
+    let theme = format!(" ◐ {} ", theme_name());
+    let width = (help.chars().count() + theme.chars().count() + 1) as u16;
+    if area.width < width + 20 {
+        return;
+    }
+    let x = area.right() - width;
+    for (text, hit, at_x) in [
+        (help.to_string(), Hit::Help, x),
+        (
+            theme.clone(),
+            Hit::Theme,
+            x + help.chars().count() as u16 + 1,
+        ),
+    ] {
+        let rect = Rect::new(at_x, area.y, text.chars().count() as u16, 1);
+        let style = if hovered(rect) {
+            Style::new()
+                .fg(ink())
+                .bg(accent2())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(accent()).bg(surface())
+        };
+        frame.render_widget(Paragraph::new(Span::styled(text, style)), rect);
+        add(rect, hit);
+    }
 }

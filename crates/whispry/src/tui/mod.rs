@@ -4,6 +4,7 @@
 mod app;
 mod ffmpeg_dialog;
 mod file_picker;
+mod help;
 mod input;
 mod run;
 mod services;
@@ -32,6 +33,7 @@ const TICK: Duration = Duration::from_millis(100);
 
 /// Open the terminal UI and run until the user quits.
 pub fn run(initial_file: Option<PathBuf>) -> io::Result<()> {
+    theme::load_theme();
     let mut app = App::new(Box::new(RealServices::new()), initial_file);
     let mut terminal = ratatui::init();
     // ratatui's panic hook restores the screen but knows nothing of the mouse.

@@ -5,12 +5,15 @@ use std::sync::mpsc::channel;
 use std::time::{Duration, Instant};
 
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{
+    KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use whispry_core::cancel::CancelToken;
 use whispry_core::config::JobConfig;
 
 use super::ffmpeg_dialog::{DialogAction, FFmpegDialog};
 use super::file_picker::{PickerAction, PickerState};
+use super::help;
 use super::run::{RunAction, RunState};
 use super::services::Services;
 use super::setup::{Field, SetupAction, SetupState};
@@ -27,6 +30,8 @@ pub struct App {
     /// The run screen, once a job has been started.
     run: Option<RunState>,
     quit: bool,
+    /// The help screen, with how far it is scrolled.
+    help: Option<u16>,
     /// When a click last did something, so a double-click cannot act twice
     /// on whatever the first click uncovered.
     last_act: Option<Instant>,
@@ -41,6 +46,7 @@ impl App {
             ffmpeg_dialog: None,
             run: None,
             quit: false,
+            help: None,
             last_act: None,
         }
     }
@@ -77,7 +83,42 @@ impl App {
         }
     }
 
+    /// Keys that work on every screen. True if the key was used.
+    fn global_key(&mut self, key: &KeyEvent) -> bool {
+        let control = key.modifiers.contains(KeyModifiers::CONTROL);
+        if control && key.code == KeyCode::Char('t') {
+            theme::next_theme();
+            return true;
+        }
+        if let Some(scroll) = &mut self.help {
+            match key.code {
+                KeyCode::Down => *scroll += 1,
+                KeyCode::Up => *scroll = scroll.saturating_sub(1),
+                KeyCode::PageDown => *scroll += 8,
+                KeyCode::PageUp => *scroll = scroll.saturating_sub(8),
+                KeyCode::Esc | KeyCode::Enter | KeyCode::F(1) | KeyCode::Char('?' | 'q' | 'c') => {
+                    self.help = None;
+                }
+                _ => {}
+            }
+            return true;
+        }
+        // "?" is a letter you can type in a text field; F1 always works.
+        let typing = self.run.is_none()
+            && self.picker.is_none()
+            && self.ffmpeg_dialog.is_none()
+            && matches!(self.setup.focus, Field::File | Field::Chunk);
+        let opens = key.code == KeyCode::F(1) || (key.code == KeyCode::Char('?') && !typing);
+        if opens && !control {
+            self.help = Some(0);
+        }
+        opens && !control
+    }
+
     pub fn on_key(&mut self, key: KeyEvent) {
+        if self.global_key(&key) {
+            return;
+        }
         if let Some(dialog) = &mut self.ffmpeg_dialog {
             match dialog.handle_key(&key) {
                 DialogAction::None => {}
@@ -148,7 +189,9 @@ impl App {
             _ => return,
         };
         if wheel != 0 {
-            if let Some(picker) = &mut self.picker {
+            if let Some(scroll) = &mut self.help {
+                *scroll = scroll.saturating_add_signed(wheel as i16);
+            } else if let Some(picker) = &mut self.picker {
                 picker.scroll(wheel);
             }
             return;
@@ -163,7 +206,13 @@ impl App {
             return;
         }
         let acts = match hit {
-            Hit::Run(_) | Hit::Dialog(_) | Hit::Browse | Hit::PickerOutside => true,
+            Hit::Run(_)
+            | Hit::Dialog(_)
+            | Hit::Browse
+            | Hit::PickerOutside
+            | Hit::Help
+            | Hit::HelpClose
+            | Hit::Theme => true,
             Hit::Setup(field) => matches!(field, Field::Start | Field::Advanced),
             Hit::PickerRow(index) => self.picker.as_ref().is_some_and(|p| p.is_selected(index)),
             _ => false,
@@ -174,6 +223,14 @@ impl App {
         let enter = KeyEvent::from(KeyCode::Enter);
         match hit {
             Hit::Nothing => {}
+            Hit::HelpClose => self.help = None,
+            Hit::Help => self.help = Some(0),
+            Hit::Theme => theme::next_theme(),
+            Hit::PickerCrumb(index) => {
+                if let Some(picker) = &mut self.picker {
+                    picker.go_to_ancestor(index);
+                }
+            }
             Hit::Dialog(index) => {
                 if let Some(dialog) = &mut self.ffmpeg_dialog {
                     dialog.focus_on(index);
@@ -233,6 +290,9 @@ impl App {
         }
         if let Some(dialog) = &self.ffmpeg_dialog {
             dialog.render(frame, area);
+        }
+        if let Some(scroll) = self.help {
+            help::render(frame, area, scroll);
         }
     }
 }

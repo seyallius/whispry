@@ -163,6 +163,16 @@ impl PickerState {
         self.select(self.selected as isize + delta);
     }
 
+    /// Show the `index`th folder of the current path (0 is the root).
+    pub fn go_to_ancestor(&mut self, index: usize) {
+        let mut chain: Vec<PathBuf> = self.dir.ancestors().map(Path::to_path_buf).collect();
+        chain.reverse();
+        if let Some(target) = chain.get(index).cloned() {
+            let came_from = self.dir.clone();
+            self.load(target, Some(&came_from));
+        }
+    }
+
     pub fn is_selected(&self, index: usize) -> bool {
         self.selected == index
     }
@@ -206,6 +216,16 @@ impl PickerState {
                     }
                 }
             }
+            KeyCode::Char('~') => {
+                if let Some(home) = std::env::home_dir() {
+                    self.load(home, None);
+                }
+            }
+            KeyCode::Char('/') => {
+                if let Some(root) = self.dir.ancestors().last().map(Path::to_path_buf) {
+                    self.load(root, None);
+                }
+            }
             KeyCode::Char(letter) => self.jump_to(letter),
             _ => {}
         }
@@ -242,13 +262,34 @@ impl PickerState {
         ])
         .areas(inner);
 
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                self.dir.display().to_string(),
-                theme::dim_style(),
-            )),
-            path_area,
-        );
+        // The path, each folder in it clickable.
+        let mut chain: Vec<&Path> = self.dir.ancestors().collect();
+        chain.reverse();
+        let mut start = 0;
+        for (index, folder) in chain.iter().enumerate() {
+            let end = folder.display().to_string().chars().count();
+            let x = (path_area.x + start as u16).min(path_area.right());
+            let width = ((end - start) as u16).min(path_area.right() - x);
+            let rect = Rect::new(x, path_area.y, width, 1);
+            let style = if theme::hovered(rect) {
+                Style::new()
+                    .fg(theme::accent2())
+                    .add_modifier(Modifier::UNDERLINED)
+            } else {
+                theme::dim_style()
+            };
+            let text: String = self
+                .dir
+                .display()
+                .to_string()
+                .chars()
+                .skip(start)
+                .take(end - start)
+                .collect();
+            frame.render_widget(Paragraph::new(Span::styled(text, style)), rect);
+            theme::add(rect, Hit::PickerCrumb(index));
+            start = end;
+        }
 
         if self.entries.is_empty() {
             frame.render_widget(
@@ -299,7 +340,7 @@ impl PickerState {
         let hint = match &self.error {
             Some(error) => Span::styled(error.clone(), Style::new().fg(theme::error())),
             None => Span::styled(
-                "Enter/click open · Backspace up · type to jump · wheel scrolls · Esc cancel",
+                "Enter open · Backspace up · ~ home · / root · click the path · Esc cancel",
                 theme::dim_style(),
             ),
         };

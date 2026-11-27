@@ -962,3 +962,86 @@ fn the_setup_screen_fits_a_standard_80x24_terminal() {
     assert!(text.contains("Minutes per chunk"), "{text}");
     assert!(text.contains("Start transcription"), "{text}");
 }
+
+#[test]
+fn question_mark_opens_help_and_escape_closes_it() {
+    let mut app = App::new(Box::new(FakeServices::new(0)), None);
+    // Typing "?" in the File field must still type.
+    press(&mut app, KeyCode::Char('?'));
+    assert!(!screen(&app, 100, 34).contains("Anywhere"));
+    press(&mut app, KeyCode::Tab); // Model: not a text field
+    press(&mut app, KeyCode::Char('?'));
+    let text = screen(&app, 100, 40);
+    assert!(
+        text.contains("Anywhere") && text.contains("File browser"),
+        "{text}"
+    );
+    press(&mut app, KeyCode::Esc);
+    assert!(!screen(&app, 100, 40).contains("Anywhere"));
+    press(&mut app, KeyCode::F(1));
+    assert!(screen(&app, 100, 40).contains("Ctrl+T"));
+    click(&mut app, Hit::HelpClose);
+    assert!(!screen(&app, 100, 40).contains("Ctrl+T"));
+}
+
+#[test]
+fn the_help_chip_can_be_clicked() {
+    let mut app = App::new(Box::new(FakeServices::new(0)), None);
+    screen(&app, 100, 34);
+    click(&mut app, Hit::Help);
+    assert!(screen(&app, 100, 40).contains("Anywhere"));
+}
+
+#[test]
+fn ctrl_t_and_the_theme_chip_change_the_theme() {
+    let mut app = App::new(Box::new(FakeServices::new(0)), None);
+    let before = screen(&app, 100, 34);
+    ctrl(&mut app, 't');
+    let after = screen(&app, 100, 34);
+    assert_ne!(before, after);
+    click(&mut app, Hit::Theme);
+    assert_ne!(after, screen(&app, 100, 34));
+    for _ in 0..4 {
+        click(&mut app, Hit::Theme);
+        screen(&app, 100, 34);
+    }
+}
+
+#[test]
+fn the_picker_can_climb_to_the_root_and_jump_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let nested = dir.path().join("a").join("b");
+    std::fs::create_dir_all(&nested).unwrap();
+    let mut picker = super::file_picker::PickerState::open(&nested);
+    let mut depth = 0;
+    while picker.entries().first().is_some_and(|e| e.name == "..") && depth < 64 {
+        picker.handle_key(&KeyEvent::from(KeyCode::Backspace));
+        depth += 1;
+    }
+    assert!(depth >= 3, "climbed only {depth} levels");
+    // From the top, `/` stays there and `~` goes home.
+    picker.handle_key(&KeyEvent::from(KeyCode::Char('/')));
+    assert!(picker.entries().iter().all(|e| e.name != ".."));
+    if std::env::home_dir().is_some() {
+        picker.handle_key(&KeyEvent::from(KeyCode::Char('~')));
+        assert_eq!(
+            picker.entries().first().map(|e| e.name.as_str()),
+            Some("..")
+        );
+    }
+}
+
+#[test]
+fn clicking_a_folder_in_the_path_goes_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let nested = dir.path().join("a").join("b");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(nested.join("x.mp3"), b"").unwrap();
+    let mut app = App::new(Box::new(FakeServices::new(0)), Some(nested.join("x.mp3")));
+    screen(&app, 120, 34);
+    click(&mut app, Hit::Browse);
+    screen(&app, 120, 34);
+    click(&mut app, Hit::PickerCrumb(0)); // the root
+    let text = screen(&app, 120, 34);
+    assert!(!text.contains("x.mp3"), "{text}");
+}
