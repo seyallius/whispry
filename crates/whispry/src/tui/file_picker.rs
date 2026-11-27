@@ -41,6 +41,8 @@ pub enum PickerAction {
 }
 
 pub struct PickerState {
+    /// First row shown; only moves when the highlight leaves the view.
+    offset: std::cell::Cell<usize>,
     dir: PathBuf,
     entries: Vec<Entry>,
     selected: usize,
@@ -56,6 +58,7 @@ pub fn is_media(path: &Path) -> bool {
 impl PickerState {
     pub fn open(dir: &Path) -> Self {
         let mut state = PickerState {
+            offset: std::cell::Cell::new(0),
             dir: PathBuf::new(),
             entries: Vec::new(),
             selected: 0,
@@ -119,6 +122,7 @@ impl PickerState {
         }
         self.entries.extend(folders);
         self.entries.extend(files);
+        self.offset.set(0);
         self.selected = keep
             .and_then(|keep| self.entries.iter().position(|entry| entry.path == keep))
             .unwrap_or(usize::from(
@@ -157,6 +161,10 @@ impl PickerState {
     /// Move the highlight by `delta` rows (the mouse wheel).
     pub fn scroll(&mut self, delta: isize) {
         self.select(self.selected as isize + delta);
+    }
+
+    pub fn is_selected(&self, index: usize) -> bool {
+        self.selected == index
     }
 
     /// A click on row `index`: the first click selects, a click on the
@@ -253,7 +261,13 @@ impl PickerState {
         }
         // Scroll just far enough to keep the highlighted row in view.
         let height = list_area.height as usize;
-        let first = (self.selected + 1).saturating_sub(height);
+        let mut first = self.offset.get();
+        if self.selected < first {
+            first = self.selected;
+        } else if self.selected >= first + height {
+            first = self.selected + 1 - height;
+        }
+        self.offset.set(first);
         for (offset, (index, entry)) in self
             .entries
             .iter()

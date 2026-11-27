@@ -16,6 +16,9 @@ use super::input::TextInput;
 use super::services::Services;
 use super::theme::{self, Hit};
 
+/// The big logo needs this many rows; shorter terminals get a one-line title.
+const TALL: u16 = 28;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
     File,
@@ -525,7 +528,7 @@ impl SetupState {
             errors,
             footer,
         ] = Layout::vertical([
-            Constraint::Length(5),
+            Constraint::Length(if area.height >= TALL { 5 } else { 3 }),
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(5),
@@ -626,16 +629,6 @@ impl SetupState {
         } else {
             "no GPU"
         };
-        let [logo_area, info_area] =
-            Layout::vertical([Constraint::Length(3), Constraint::Length(2)]).areas(area);
-        if area.width >= theme::LOGO_WIDTH {
-            frame.render_widget(Paragraph::new(theme::logo()), logo_area);
-        } else {
-            frame.render_widget(
-                Paragraph::new(Line::from(theme::gradient_text("Whispry"))),
-                logo_area,
-            );
-        }
         let info = Line::from(Span::styled(
             format!(
                 "{} · {} CPU threads · {gpu}",
@@ -643,13 +636,20 @@ impl SetupState {
             ),
             theme::dim_style(),
         ));
-        frame.render_widget(
-            Paragraph::new(vec![
-                Line::from("Whispry · private, local speech-to-text"),
-                info,
-            ]),
-            info_area,
-        );
+        let tagline = "private, local speech-to-text";
+        if area.height >= 5 && area.width >= theme::LOGO_WIDTH {
+            let [logo_area, info_area] =
+                Layout::vertical([Constraint::Length(3), Constraint::Length(2)]).areas(area);
+            frame.render_widget(Paragraph::new(theme::logo()), logo_area);
+            frame.render_widget(
+                Paragraph::new(vec![Line::from(format!("Whispry · {tagline}")), info]),
+                info_area,
+            );
+        } else {
+            let mut title = theme::gradient_text("Whispry");
+            title.push(Span::raw(format!("  {tagline}")));
+            frame.render_widget(Paragraph::new(vec![Line::from(title), info]), area);
+        }
     }
 
     fn render_devices(&self, frame: &mut Frame, area: Rect, services: &dyn Services) {

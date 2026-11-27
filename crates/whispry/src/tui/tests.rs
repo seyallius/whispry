@@ -781,15 +781,35 @@ use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use super::theme::{Hit, rect_of};
 
-/// Click the middle of whatever `hit` was last drawn as.
-fn click(app: &mut App, hit: Hit) {
+thread_local! {
+    static CLOCK: (std::time::Instant, Cell<u32>) = (std::time::Instant::now(), Cell::new(0));
+}
+
+/// A moment `ms` later than the last one asked for.
+fn later(ms: u32) -> std::time::Instant {
+    CLOCK.with(|(start, passed)| {
+        passed.set(passed.get() + ms);
+        *start + Duration::from_millis(u64::from(passed.get()))
+    })
+}
+
+fn click_at(app: &mut App, hit: Hit, ms_later: u32) {
     let rect = rect_of(hit).unwrap_or_else(|| panic!("{hit:?} is not on screen"));
-    app.on_mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: rect.x + rect.width / 2,
-        row: rect.y + rect.height / 2,
-        modifiers: KeyModifiers::NONE,
-    });
+    app.on_mouse_at(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + rect.width / 2,
+            row: rect.y + rect.height / 2,
+            modifiers: KeyModifiers::NONE,
+        },
+        later(ms_later),
+    );
+}
+
+/// Click the middle of whatever `hit` was last drawn as, well after any
+/// earlier click.
+fn click(app: &mut App, hit: Hit) {
+    click_at(app, hit, 1000);
 }
 
 #[test]
@@ -841,12 +861,15 @@ fn clicking_the_picker_selects_then_opens_and_outside_closes() {
 
     click(&mut app, Hit::Browse);
     screen(&app, 100, 34);
-    app.on_mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: 0,
-        row: 0,
-        modifiers: KeyModifiers::NONE,
-    });
+    app.on_mouse_at(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        },
+        later(1000),
+    );
     assert!(!screen(&app, 100, 34).contains("Choose a file"));
     drop(dir);
 }
@@ -859,5 +882,83 @@ fn clicking_a_run_button_works() {
     screen(&app, 100, 34);
     click(&mut app, Hit::Run(super::run::Button::New));
     let text = screen(&app, 100, 34);
+    assert!(text.contains("Start transcription"), "{text}");
+}
+
+#[test]
+fn a_double_click_on_a_button_acts_once() {
+    // Retry on CPU and Cancel share a spot; the second click must not hit Cancel.
+    let (mut app, _dir) = running_app();
+    send(JobMessage::Done(Err(JobError::Engine(EngineError::Load {
+        device: "cuda".into(),
+        message: "out of memory".into(),
+    }))));
+    deliver(&mut app);
+    screen(&app, 100, 34);
+    let before = jobs_started();
+    click_at(&mut app, Hit::Run(super::run::Button::RetryOnCpu), 1000);
+    screen(&app, 100, 34);
+    click_at(&mut app, Hit::Run(super::run::Button::Cancel), 100);
+    assert_eq!(jobs_started(), before + 1);
+    assert!(!last_cancel().is_cancelled());
+}
+
+#[test]
+fn a_double_click_on_browse_keeps_the_picker_open() {
+    let (mut app, _dir, _audio) = app_with_file(FakeServices::new(0));
+    screen(&app, 100, 34);
+    click_at(&mut app, Hit::Browse, 1000);
+    screen(&app, 100, 34);
+    app.on_mouse_at(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 95,
+            row: 7,
+            modifiers: KeyModifiers::NONE,
+        },
+        later(100),
+    );
+    assert!(screen(&app, 100, 34).contains("Choose a file"));
+}
+
+#[test]
+fn the_picker_does_not_scroll_under_a_click() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..40 {
+        std::fs::write(dir.path().join(format!("clip{i:02}.mp3")), b"").unwrap();
+    }
+    let mut app = App::new(
+        Box::new(FakeServices::new(0)),
+        Some(dir.path().join("clip00.mp3")),
+    );
+    screen(&app, 100, 34);
+    click(&mut app, Hit::Browse);
+    screen(&app, 100, 34);
+    for _ in 0..39 {
+        press(&mut app, KeyCode::Down);
+    }
+    let before = screen(&app, 100, 34);
+    let row = before
+        .lines()
+        .position(|l| l.contains("clip20.mp3"))
+        .expect("clip20 is visible");
+    click(&mut app, Hit::PickerRow(21)); // ".." is row 0
+    let after = screen(&app, 100, 34);
+    assert_eq!(
+        after.lines().position(|l| l.contains("clip20.mp3")),
+        Some(row),
+        "{after}"
+    );
+}
+
+#[test]
+fn the_setup_screen_fits_a_standard_80x24_terminal() {
+    let mut app = App::new(Box::new(FakeServices::new(0)), None);
+    for _ in 0..4 {
+        press(&mut app, KeyCode::Tab);
+    }
+    press(&mut app, KeyCode::Enter); // open Advanced
+    let text = screen(&app, 80, 24);
+    assert!(text.contains("Minutes per chunk"), "{text}");
     assert!(text.contains("Start transcription"), "{text}");
 }

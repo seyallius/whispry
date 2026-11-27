@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -16,6 +16,9 @@ use super::services::Services;
 use super::setup::{Field, SetupAction, SetupState};
 use super::theme::{self, Hit};
 
+/// Clicks this soon after one that acted are ignored.
+const DOUBLE_CLICK: Duration = Duration::from_millis(300);
+
 pub struct App {
     services: Box<dyn Services>,
     setup: SetupState,
@@ -24,6 +27,9 @@ pub struct App {
     /// The run screen, once a job has been started.
     run: Option<RunState>,
     quit: bool,
+    /// When a click last did something, so a double-click cannot act twice
+    /// on whatever the first click uncovered.
+    last_act: Option<Instant>,
 }
 
 impl App {
@@ -35,6 +41,7 @@ impl App {
             ffmpeg_dialog: None,
             run: None,
             quit: false,
+            last_act: None,
         }
     }
 
@@ -129,6 +136,10 @@ impl App {
 
     /// A left click does what the keyboard would: focus the thing, then press it.
     pub fn on_mouse(&mut self, mouse: MouseEvent) {
+        self.on_mouse_at(mouse, Instant::now());
+    }
+
+    pub fn on_mouse_at(&mut self, mouse: MouseEvent, now: Instant) {
         theme::set_mouse(mouse.column, mouse.row);
         let wheel: isize = match mouse.kind {
             MouseEventKind::ScrollUp => -3,
@@ -145,6 +156,21 @@ impl App {
         let Some(hit) = theme::at(mouse.column, mouse.row) else {
             return;
         };
+        if self
+            .last_act
+            .is_some_and(|t| now.saturating_duration_since(t) < DOUBLE_CLICK)
+        {
+            return;
+        }
+        let acts = match hit {
+            Hit::Run(_) | Hit::Dialog(_) | Hit::Browse | Hit::PickerOutside => true,
+            Hit::Setup(field) => matches!(field, Field::Start | Field::Advanced),
+            Hit::PickerRow(index) => self.picker.as_ref().is_some_and(|p| p.is_selected(index)),
+            _ => false,
+        };
+        if acts {
+            self.last_act = Some(now);
+        }
         let enter = KeyEvent::from(KeyCode::Enter);
         match hit {
             Hit::Nothing => {}
