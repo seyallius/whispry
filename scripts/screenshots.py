@@ -6,7 +6,8 @@ Runs the TUI in a pseudo-terminal, reads the screen with a terminal emulator
 a real run of the Small model on a short synthetic recording.
 
 Needs: pip install pyte pillow; ffmpeg and espeak-ng (to make the demo audio);
-a cached Small model; and a built binary (cargo build --release).
+a cached Small model; and a built binary (cargo build --release). gifsicle is
+used when available to shrink the demo GIF.
 
     python3 scripts/screenshots.py [path/to/whispry] [output_dir]
 """
@@ -289,12 +290,19 @@ def demo_gif(root, recording):
 
     scale = 880 / frames[0].width
     size = (880, round(frames[0].height * scale))
-    small = [f.resize(size, Image.LANCZOS).quantize(colors=96, method=Image.MEDIANCUT, dither=Image.NONE)
+    small = [f.resize(size, Image.LANCZOS).quantize(colors=64, method=Image.MEDIANCUT, dither=Image.NONE)
              for f in frames]
     OUT.mkdir(parents=True, exist_ok=True)
-    small[0].save(OUT / "demo.gif", save_all=True, append_images=small[1:], duration=durations,
+    gif = OUT / "demo.gif"
+    small[0].save(gif, save_all=True, append_images=small[1:], duration=durations,
                   loop=0, optimize=True, disposal=1)
-    print("wrote", OUT / "demo.gif", f"({len(frames)} frames)")
+    # gifsicle's lossy mode drops a terminal recording to about a third of the
+    # size with no visible change (a dark screen has few colours). Without it
+    # the file still works, just larger.
+    if shutil.which("gifsicle"):
+        subprocess.run(["gifsicle", "-O3", "--lossy=100", str(gif), "-o", f"{gif}.tmp"], check=True)
+        os.replace(f"{gif}.tmp", gif)
+    print("wrote", gif, f"({len(frames)} frames, {gif.stat().st_size // 1024} KiB)")
 
 
 def main():
