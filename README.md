@@ -6,44 +6,64 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/transcribing.png" alt="Whispry transcribing a meeting recording, with a live transcript and progress" width="820">
+  <img src="docs/screenshots/demo.gif" alt="Whispry in action: switching themes, opening help, clicking Start, and watching the transcript fill in" width="820">
 </p>
 
 Whispry is a friendly terminal app for speech-to-text. Point it at a
 meeting, lecture, interview, or voice memo, and watch the transcript
-appear line by line. It runs on Linux, Windows, and macOS, uses your
-NVIDIA GPU when you have one, and works fine on a plain laptop CPU when
-you don't.
+appear line by line. It runs on Linux, Windows and macOS, works on a plain
+laptop CPU, and can use an NVIDIA GPU if you choose to set that up.
 
-Under the hood it uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
-and CTranslate2, OpenAI's Whisper models made fast.
+Under the hood it runs OpenAI's Whisper models with
+[CTranslate2](https://github.com/OpenNMT/CTranslate2), built into the program
+itself. It is a single Rust program: no Python, no virtual environment, no
+setup step.
 
 ## Quick start
 
-```bash
-git clone https://github.com/seyallius/whispry.git
-cd whispry
-python3 scripts/setup.py   # Windows: py scripts\setup.py
-.venv/bin/whispry          # Windows: .venv\Scripts\whispry
-```
+1. Install [FFmpeg](#ffmpeg) if you don't have it.
+2. Download the archive for your system from the
+   [Releases page](https://github.com/seyallius/whispry/releases) and unpack it.
+3. Run it:
 
-That's it. Setup figures out whether you have a GPU and whether FFmpeg
-is installed, and asks you only when it needs a decision.
+   ```bash
+   cd whispry-0.4.0-linux-x86_64
+   ./whispry                 # Windows: .\whispry.exe
+   ```
+
+That's it. The first time you transcribe, Whispry downloads the speech model
+you picked (once; after that it works offline). The plain archives run on the
+CPU and need no GPU. See [GPU acceleration](#gpu-acceleration-optional) if you
+have an NVIDIA GPU.
 
 ## A quick tour
 
-**Pick what to transcribe.** Choose a file (type a path or browse),
-a model, the language, and where to run it. Whispry checks your machine
-first: if there's no usable GPU, that option is greyed out and tells you
-why.
+**Pick what to transcribe.** Choose a file (type a path, paste one, or
+browse), a model, the language, and where to run it. Whispry checks your
+machine first: if there's no usable GPU, that option is greyed out and tells
+you why.
 
 <p align="center">
   <img src="docs/screenshots/setup.png" alt="Setup screen with file, model, language and device options" width="720">
 </p>
 
+**Browse for a file.** Press `Ctrl+O` (or click the hint) to look around.
+Folders come first, then your audio and video files. Go up with `Backspace`
+or the `..` row, press `~` for your home folder or `/` for the root, or click
+any folder in the path at the top to jump straight there.
+
+<p align="center">
+  <img src="docs/screenshots/browser.png" alt="File browser listing folders and recordings" width="720">
+</p>
+
 **Watch it work.** The transcript fills in as Whispry listens, with
-progress, speed, and an estimate of the time left. Changed your mind?
-Press `Esc`; anything already transcribed is kept.
+progress, speed, and an estimate of the time left. The bar shows which part
+of the audio is being decoded right now, so you can always tell it's busy.
+Changed your mind? Press `Esc`; anything already transcribed is kept.
+
+<p align="center">
+  <img src="docs/screenshots/transcribing.png" alt="Whispry transcribing a recording, with a live transcript and progress" width="720">
+</p>
 
 **Get your text.** A timestamped `.txt` file lands right next to your
 recording.
@@ -52,74 +72,142 @@ recording.
   <img src="docs/screenshots/done.png" alt="Finished transcription with the saved file path" width="720">
 </p>
 
-**Missing FFmpeg? No problem.** Whispry tells you how to install it for
-your system, or sets up a bundled copy for you. Your call.
+**Missing FFmpeg? Whispry tells you what to do.** It shows the install
+steps for your system and picks up where you left off once it's installed.
 
 <p align="center">
-  <img src="docs/screenshots/ffmpeg.png" alt="Dialog offering install steps or a bundled FFmpeg" width="720">
+  <img src="docs/screenshots/ffmpeg.png" alt="Dialog explaining how to install FFmpeg" width="720">
 </p>
 
-_Screenshots show demo content._
+**Make it yours.** Twelve themes, light and dark: Aurora, Sunset, Ocean,
+Forest, Neon, Mono, Paper, Dracula, Nord, Gruvbox, Solarized and Dawn. Press
+`Ctrl+T` or click the theme name at the bottom; Whispry remembers your pick.
+
+<p align="center">
+  <img src="docs/screenshots/themes.png" alt="The setup screen in all twelve themes" width="820">
+</p>
+
+**Forgot a key? Press `?`.** Every shortcut and mouse action is listed, and
+the mouse works everywhere.
+
+<p align="center">
+  <img src="docs/screenshots/help.png" alt="The help screen listing every key and mouse action" width="720">
+</p>
+
+_Screenshots are real, taken from Whispry transcribing a short synthetic
+recording. Regenerate them with `scripts/screenshots.py`._
 
 ## Features
 
 - **Private by design:** your audio never leaves your computer
-- **CPU or GPU:** runs anywhere and uses an NVIDIA GPU automatically when
-  available, falling back to the CPU if the GPU has trouble
+- **CPU everywhere, GPU if you want it:** the standard edition runs on the
+  CPU; an optional CUDA edition can use an NVIDIA GPU
 - **Handles long recordings:** audio is processed a few minutes at a time,
-  so a three-hour recording uses no more memory than a three-minute one
+  so a three-hour recording needs no more memory for audio than a
+  three-minute one
+- **Cuts at pauses, not mid-word:** each chunk ends in a quiet moment
 - **Persian and English**, or let Whispry detect the language
 - **Small and Medium models**, downloaded once and then used offline
-- **Terminal UI for people, CLI for scripts**, both powered by the same engine
+- **Terminal UI for people, command line for scripts**, both powered by the
+  same engine
 - **Timestamped UTF-8 text** you can search, edit, or share
 
 ## Requirements
 
-- Python 3.10 or newer
-- FFmpeg (Whispry can install a bundled copy for you, see below)
-- Optional: an NVIDIA GPU with a recent driver (Linux or Windows)
-- Internet access for installation and the first download of each model
+- Linux or Windows (64-bit Intel/AMD), or macOS on Apple silicon or Intel
+- FFmpeg (see [below](#ffmpeg))
+- Internet access for the first download of each model
+- Optional, Linux and Windows only: an NVIDIA GPU with a recent driver, and
+  the CUDA edition (see [GPU acceleration](#gpu-acceleration-optional))
 
 ## Installation
 
-The [quick start](#quick-start) covers most people. In more detail:
+Download the archive for your system from the
+[Releases page](https://github.com/seyallius/whispry/releases), unpack it, and
+run `whispry`. There is nothing else to install. Archives are named
+`whispry-<version>-<system>`:
 
-Setup creates a `.venv` folder and installs Whispry into it. It installs
-the CUDA libraries only when it detects an NVIDIA GPU. Pass `--gpu` or
-`--cpu` to override.
+| Archive | For |
+|---|---|
+| `linux-x86_64` | Linux, 64-bit Intel/AMD (built against a fairly old glibc; very old distributions may not work) |
+| `windows-x86_64` | Windows, 64-bit |
+| `macos-arm64` | macOS on Apple silicon (CPU only) |
+| `macos-x86_64` | macOS on Intel (CPU only) |
+| `linux-x86_64-cuda`, `windows-x86_64-cuda` | The same, with optional NVIDIA GPU support |
+
+The CUDA editions may be missing from a release if their build failed; the
+CPU editions are always published.
+
+### GPU acceleration (optional)
+
+The CPU edition works everywhere and is the right choice unless you have an
+NVIDIA GPU. For a GPU:
+
+1. Download the archive whose name ends in `-cuda`.
+2. Run `whispry gpu` to see the GPU status.
+3. Run `whispry gpu --install` to download the NVIDIA cuBLAS library
+   (about 550 MB).
+
+Nothing is downloaded unless you ask. If your computer has no NVIDIA GPU, no
+CUDA downloads are offered at all. CUDA libraries that are already on your
+computer are reused instead of downloaded again. Without them, the CUDA
+edition simply runs on the CPU.
+
+### Building from source
+
+You need [Rust](https://rustup.rs), [CMake](https://cmake.org) and a C++
+compiler (GCC or Clang on Linux, Xcode command line tools on macOS, Visual
+Studio Build Tools on Windows). The first build compiles CTranslate2 from
+source and takes several minutes.
+
+```bash
+git clone https://github.com/seyallius/whispry.git
+cd whispry
+cargo build --release
+./target/release/whispry
+```
+
+For the CUDA edition, install the NVIDIA CUDA toolkit (12.x) and build with:
+
+```bash
+cargo build --release --features cuda
+```
 
 ### FFmpeg
 
-If FFmpeg is not on your PATH, setup (and the app) asks you to choose:
+Whispry uses FFmpeg to read audio and video files. If it isn't installed,
+the app shows these steps for your system, and `whispry ffmpeg` prints them
+too:
 
-1. **Install FFmpeg yourself.** Whispry shows the steps for your system
-   (`winget install --id Gyan.FFmpeg -e` on Windows, `brew install ffmpeg`
-   on macOS, your package manager on Linux). Choose this if other programs
-   also use FFmpeg.
-2. **Use the bundled FFmpeg.** This installs
-   [imageio-ffmpeg](https://pypi.org/project/imageio-ffmpeg/) into
-   Whispry's own environment. It is a full FFmpeg build, about 30–40 MB to
-   download and 70–170 MB on disk depending on the OS.
+- **Windows:** `winget install --id Gyan.FFmpeg -e`
+- **Ubuntu or Debian:** `sudo apt install ffmpeg`
+- **Fedora:** `sudo dnf install ffmpeg-free`
+- **Arch:** `sudo pacman -S ffmpeg`
 
-Nothing is installed unless you pick option 2. You can run the check again
-at any time with `whispry ffmpeg`.
+Open a new terminal afterwards so the change to `PATH` is picked up.
 
 ## Usage
 
-Activate the environment (`source .venv/bin/activate`, or
-`.venv\Scripts\activate` on Windows), then run:
+Run `whispry` with no arguments to open the terminal UI. Choose a file,
+model, language, and device, then press **Start**.
 
-```bash
-whispry
-```
+| Key | What it does |
+|---|---|
+| `Tab` / `Shift+Tab`, `↑` / `↓` | Move between fields |
+| `←` / `→` | Change a choice |
+| `Ctrl+O` | Browse for a file |
+| `Ctrl+S` | Start transcribing |
+| `?` or `F1` | Show every key and mouse action (`?` types normally in a text field; use `F1` there) |
+| `Ctrl+T` | Next theme (12 to choose from, light and dark); your choice is remembered |
+| `Esc` | Cancel a running job (text so far is kept) |
+| `Ctrl+Q` | Quit (cancels a running job first) |
 
-This opens the terminal UI. Choose a file, model, language, and device,
-then press **Start** (or `Ctrl+S`). The GPU option is greyed out with the
-reason when it can't be used. During transcription, press `Esc` to cancel;
-text transcribed so far is kept.
+The mouse works everywhere: click buttons, fields, the `◀ ▶` arrows, folders,
+and the `? Help` and theme chips at the bottom; scroll the file list with the
+wheel. While the mouse is captured, hold `Shift` (`Option` in iTerm2) to select
+text normally.
 
-Without activating, run `.venv/bin/whispry` (Windows:
-`.venv\Scripts\whispry`).
+You can also paste a path, quotes and all, straight into the file field.
 
 ### Command line
 
@@ -127,13 +215,17 @@ Without activating, run `.venv/bin/whispry` (Windows:
 whispry transcribe recording.mp3
 whispry transcribe recording.mp3 --language fa --model medium
 whispry transcribe recording.mp4 --device cpu --output notes.txt
-whispry devices          # OS, CPU/GPU availability, FFmpeg in use
+whispry devices          # OS, CPU and GPU, and FFmpeg
+whispry gpu              # NVIDIA GPU status (CUDA edition)
+whispry gpu --install    # download the cuBLAS library (~550 MB)
+whispry ffmpeg           # check for FFmpeg, or show how to install it
 whispry download medium  # pre-download a model for offline use
 ```
 
-`--device` accepts `auto` (default: GPU if available, else CPU), `cpu`,
-or `cuda`. `--chunk-minutes` sets how much audio is processed at once
-(default 10; lower uses less RAM).
+`--device` accepts `auto` (default: GPU if available, else CPU), `cpu`, or
+`cuda`. `--chunk-minutes` sets how much audio is processed at once (default
+10; lower uses less RAM). Press `Ctrl+C` to stop; the text so far stays in
+the output file and Whispry exits with code 130.
 
 The transcription is written to a `.txt` file beside the input unless
 `--output` is given.
@@ -144,51 +236,63 @@ Whispry uses the Small model by default. Each model is downloaded from
 Hugging Face on first use and cached in:
 
 - Linux: `~/.cache/whispry/models`
-- Windows: `%LOCALAPPDATA%\whispry\models`
 - macOS: `~/Library/Caches/whispry/models`
+- Windows: `%LOCALAPPDATA%\whispry\models`
 
-Set `WHISPRY_MODEL_DIR` to use another folder. Models downloaded by
-earlier versions into the repository's `models/` folder are still used.
-
-After the model is cached, transcription works offline.
+Set `WHISPRY_MODEL_DIR` to use another folder. After a model is cached,
+transcription works offline.
 
 ## How it works
 
 1. Detect the OS, whether a usable NVIDIA GPU is present, and FFmpeg.
-2. Locate or download the selected model, then load it on the chosen
-   device. On the GPU, CUDA libraries installed by pip are loaded from
-   inside Python, with no environment variables or wrapper scripts.
-3. Stream the decoded audio from FFmpeg in blocks.
-4. Group blocks into windows of about 10 minutes, ending each window
-   inside a pause (found with Silero VAD) so no word is cut in half.
-5. Transcribe each window. The language is detected once and then kept,
-   and each window gets the end of the previous one as context.
+2. Find the selected model, or download it, and load it on the chosen device.
+3. Stream the decoded audio from FFmpeg in small blocks.
+4. Group blocks into windows of about 10 minutes, ending each window in the
+   longest pause near its end, so no word is cut in half.
+5. Send each window to the speech engine in pieces of at most 30 seconds,
+   cut at pauses. The language is detected once and then kept.
 6. Write each timestamped line to the output file as soon as it is ready.
 
-The code is split into two layers:
+The code is split into two parts:
 
-- `whispry/core/`: all logic (detection, FFmpeg, streaming, models,
-  transcription). It never prints. It reports progress through typed
-  events and can be cancelled from another thread.
-- `whispry/tui/` and `whispry/cli.py`: front ends that only turn user
-  input into a job and render the events it emits.
+- `crates/whispry-core/`: all the logic (detection, FFmpeg, streaming,
+  chunking, models, the job runner). It never prints; it reports progress
+  through typed events and can be cancelled from another thread.
+- `crates/whispry/`: the terminal UI and the command line. They only turn
+  user input into a job and draw the events it emits.
 
 ## Development
 
-The `justfile` holds developer recipes. Run `just` to list them.
+You need [Rust](https://rustup.rs), CMake and a C++ compiler (see
+[Building from source](#building-from-source)). Python 3 with `pytest` is
+needed only for the packaging script tests, and
+[just](https://github.com/casey/just) for the recipes. Run `just` to list them.
 
 ```bash
-just setup   # create .venv with dev tools
-just test    # run the test suite
-just check   # show detected devices and FFmpeg
+just test    # Rust tests and packaging script tests
+just lint    # formatting and clippy
 just run     # run Whispry from the checkout
+just check   # show detected devices and FFmpeg
 ```
+
+To retake the screenshots and demo GIF, build a release binary and run
+`python3 scripts/screenshots.py` (needs `pip install pyte pillow`, `ffmpeg`,
+`espeak-ng` and a downloaded Small model).
+
+Tests that need FFmpeg are skipped when it is missing. Set
+`WHISPRY_TEST_STRICT=1` to make them fail instead, as CI does.
+
+To publish a release, push a tag such as `v0.4.0` (it must match the
+version in `Cargo.toml`). GitHub Actions builds the archives for Linux,
+Windows and macOS (plus the optional CUDA editions) and attaches them to a
+new release.
 
 ## Limitations
 
-- GPU acceleration requires an NVIDIA GPU with CUDA 12 support. Apple
-  Silicon and AMD GPUs run on the CPU.
-- The CPU is much slower than a GPU, especially with the Medium model.
+- GPU acceleration requires an NVIDIA GPU, the CUDA edition, and Linux or
+  Windows. Apple silicon GPUs and AMD GPUs are not supported; macOS runs on
+  the CPU.
+- The CPU is slower than a GPU, especially with the Medium model.
 - Progress is estimated from completed segments.
 - The Small model may be less accurate for difficult Persian audio.
 
@@ -196,8 +300,9 @@ just run     # run Whispry from the checkout
 
 Audio processing happens locally.
 
-Model downloads contact Hugging Face when a model is missing.
-No audio file is intentionally uploaded by the application.
+Model downloads contact Hugging Face when a model is missing, and
+`whispry gpu --install` downloads the cuBLAS library when you ask for it. No
+audio file is uploaded by the application.
 
 ## License
 

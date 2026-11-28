@@ -1,0 +1,35 @@
+//! All of Whispry's logic: device detection, FFmpeg, audio streaming,
+//! chunking, models and the speech engine.
+//!
+//! This crate never prints. Front ends (the TUI and the CLI) turn user input
+//! into a job and render the events the job emits.
+
+pub mod audio;
+pub mod cancel;
+pub mod chunking;
+pub mod config;
+pub mod cuda_libs;
+pub mod engine;
+pub mod events;
+pub mod ffmpeg;
+pub mod models;
+pub mod platform;
+mod process;
+pub mod timestamps;
+pub mod transcriber;
+
+#[cfg(test)]
+mod test_support;
+
+/// The version of Whispry, taken from the workspace manifest.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_is_not_empty() {
+        assert!(!VERSION.is_empty());
+    }
+}
