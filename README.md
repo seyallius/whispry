@@ -27,7 +27,7 @@ setup step.
 3. Run it:
 
    ```bash
-   cd whispry-0.3.0-linux-x86_64
+   cd whispry-0.4.0-linux-x86_64
    ./whispry                 # Windows: .\whispry.exe
    ```
 
@@ -282,7 +282,7 @@ To retake the screenshots and demo GIF, build a release binary and run
 Tests that need FFmpeg are skipped when it is missing. Set
 `WHISPRY_TEST_STRICT=1` to make them fail instead, as CI does.
 
-To publish a release, push a tag such as `v0.3.0` (it must match the
+To publish a release, push a tag such as `v0.4.0` (it must match the
 version in `Cargo.toml`). GitHub Actions builds the archives for Linux,
 Windows and macOS (plus the optional CUDA editions) and attaches them to a
 new release.

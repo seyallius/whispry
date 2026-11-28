@@ -2,7 +2,7 @@
 """Build a release archive: the program, LICENSE and README.md.
 
     python3 scripts/package.py --binary target/release/whispry \
-        --version 0.3.0 --target linux-x86_64 --out dist
+        --version 0.4.0 --target linux-x86_64 --out dist
 
 Windows targets get a .zip, everything else a .tar.gz. Unzipping gives one
 folder, whispry-<version>-<target>. The target may end in -cuda for the CUDA

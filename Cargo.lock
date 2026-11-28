@@ -3126,7 +3126,7 @@ dependencies = [
 
 [[package]]
 name = "whispry"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "clap",
  "ctrlc",
@@ -3138,7 +3138,7 @@ dependencies = [
 
 [[package]]
 name = "whispry-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ct2rs",
  "serde",
